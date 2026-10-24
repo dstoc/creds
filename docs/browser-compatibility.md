@@ -1,6 +1,6 @@
 # Local browser compatibility probes
 
-These experiments cover the first browser integration step in the creds proposal. The Rust listener and Python static-file server run on loopback. They do not provide an application backend.
+These experiments cover the local browser probes and the first authenticated handoff implementation. The Rust listener and Python static-file server run on loopback. They do not provide an application backend.
 
 ## Observed runner results
 
@@ -20,7 +20,7 @@ Chromium connected to the Rust `wtransport` listener with the printed SHA-256 ce
 
 Chromium then tried the same URL with one bit changed in the expected certificate hash. The session failed with `WebTransportError: Opening handshake failed`; the browser console reported `QUIC_TLS_CERTIFICATE_UNKNOWN`. The positive case completed first against the same live endpoint.
 
-The tested Chromium instance used `--acceptInsecureCerts true`. The mismatched hash still failed. This flag permits the local self-signed test certificate; it does not replace the `serverCertificateHashes` check. Production pinning and origin handling remain part of the future operation implementation.
+The local self-signed certificate was permitted with the browser's local insecure-certificate test setting (`--ignore-certificate-errors` for direct Chromium launch, and `--acceptInsecureCerts true` in the Chrome DevTools controlled context). The mismatched hash still failed in both checks. These settings permit the local test certificate; they do not replace the `serverCertificateHashes` check. The authenticated handoff below also uses the hash pin and checks the configured Origin.
 
 ### WebAuthn PRF
 
@@ -35,6 +35,12 @@ The PRF input in this probe is a local test string. This check does not verify d
 Run date: 2026-10-24. Chromium 156 created a discoverable ES256 credential through the **Create passkey** action with required user verification, no attestation, and the PRF extension. The page confirmed that PRF returned 32 bytes. `getPublicKeyAlgorithm()` returned `-7`, and `getPublicKey()` returned DER SubjectPublicKeyInfo bytes that the page displayed as unpadded base64url. The exported key was accepted by `creds setup`, and `creds check` reported its SHA-256 fingerprint.
 
 This used the real Chromium WebAuthn APIs with a temporary CDP-controlled CTAP 2.1 virtual authenticator configured for resident keys, user verification, automatic presence, and PRF. This does not establish physical authenticator, passkey-provider, or cross-device compatibility.
+
+### Authenticated handoff
+
+Run date: 2026-10-24. Chromium 156 connected to a per-operation Rust WebTransport listener with the certificate hash from the QR fragment. The page removed the fragment, displayed `workstation.localhost`, the exact name, revision, and operation, and required an explicit approval click. The configured Origin was `https://localhost:8000`. The CLI accepted the assertion from the same connection, encrypted revision 1, then decrypted it in a second approved operation. The decrypted output matched the source byte-for-byte, including a NUL byte.
+
+This used the CDP-controlled CTAP 2.1 virtual authenticator with PRF support. The runner's system resolver did not resolve `workstation.localhost`; Chromium needed `--host-resolver-rules='MAP workstation.localhost 127.0.0.1'`. That local mapping made the loopback smoke test possible. It does not establish that deployment DNS or UDP reachability works.
 
 The installed `chrome-devtools` 1.12.0 CLI returned after `start`, and `status` reported no running daemon in this runner. The page action was exercised through a direct CDP WebSocket connection instead. The runner had no physical authenticator or deployed network to test.
 
@@ -110,10 +116,10 @@ Use five terminals from the repository root. Keep each long-running process open
 
 7. On the same page, create and export a setup key. Use the current UID from a fresh snapshot and click **Create passkey and export public key**. The browser creates a new discoverable passkey and requests user verification. The page reports success after PRF evaluation and displays the unpadded base64url DER SPKI key in a read-only field. Use **Copy public key** or select the field and copy it into `creds setup`.
 
-The Python server adds CSP, `frame-ancestors 'none'`, `nosniff`, and referrer-policy headers. `frame-ancestors` must be sent as an HTTP response header; the HTML meta policy does not replace it. Use the local server's response headers as the deployment header baseline. The server serves only static files from `web/` and listens on loopback port 8000.
+The Python server adds CSP, `frame-ancestors 'none'`, `nosniff`, and referrer-policy headers. `frame-ancestors` must be sent as an HTTP response header; the HTML meta policy does not replace it. Use the local server's response headers as the deployment header baseline. Replace the `keys.example` CSP suffix with the deployed app hostname. The server serves only static files from `web/` and listens on loopback port 8000. For a local HTTPS page, pass `--tls-cert` and `--tls-key` to `scripts/serve.py`.
 
 ## Limits and later checks
 
 This runner has no real user device, physical authenticator, passkey-provider account, or deployment UDP network. These results establish only the local Chromium behavior listed above.
 
-Before release, manually check passkey creation, public-key export, and repeated PRF evaluation with each intended browser and authenticator combination. Also check local-network permission prompts and UDP reachability from a separate device to the deployed HTTPS origin. Do not infer device or network support from the virtual authenticator or loopback transport tests.
+Before release, manually check passkey creation, public-key export, approval, wrong-passkey failure, and repeat decryption with each intended browser and authenticator combination. Also check local-network permission prompts and UDP reachability from a separate device to the deployed HTTPS origin. Do not infer device or network support from the virtual authenticator or loopback transport tests.

@@ -3,7 +3,8 @@ import { afterEach, test } from "node:test";
 import { webcrypto } from "node:crypto";
 
 import { decodeBase64Url } from "./encoding.mjs";
-import { createPasskey } from "./webauthn.mjs";
+import { createApprovalAssertion, createPasskey } from "./webauthn.mjs";
+import { prfInput } from "./envelope.mjs";
 
 const originalNavigator = Object.getOwnPropertyDescriptor(globalThis, "navigator");
 const originalWindow = globalThis.window;
@@ -23,13 +24,14 @@ function installWebAuthn({
   let createOptions;
   let getOptions;
   class FakePublicKeyCredential {
-    constructor(response) {
+    constructor(response, extensions = { prf: { enabled: prfEnabled } }) {
       this.response = response;
       this.rawId = credentialId;
+      this.extensions = extensions;
     }
 
     getClientExtensionResults() {
-      return { prf: { enabled: prfEnabled } };
+      return this.extensions;
     }
   }
 
@@ -44,7 +46,11 @@ function installWebAuthn({
     },
     get: async (options) => {
       getOptions = options;
-      return { getClientExtensionResults: () => ({ prf: { results: { first: prfResult } } }) };
+      return new FakePublicKeyCredential({
+        clientDataJSON: Uint8Array.of(1, 2, 3).buffer,
+        authenticatorData: Uint8Array.of(4, 5, 6).buffer,
+        signature: Uint8Array.of(7, 8, 9).buffer,
+      }, { prf: { results: { first: prfResult } } });
     },
   };
 
@@ -124,4 +130,38 @@ test("fails clearly for an unexpected algorithm or an insecure context", async (
 
   installWebAuthn({ secure: false });
   await assert.rejects(createPasskey("Work laptop"), /requires a secure context/u);
+});
+
+test("approval uses the exact CLI challenge and derives from the v1 PRF input", async () => {
+  const prfResult = new Uint8Array(32).fill(0x5a).buffer;
+  const api = installWebAuthn({ prfResult });
+  const request = {
+    challenge: Uint8Array.from({ length: 32 }, (_, index) => index),
+    name: "secret-x",
+    revision: 3,
+  };
+  const output = await createApprovalAssertion(request, new AbortController().signal);
+  const options = api.getOptions();
+  assert.deepEqual(options.publicKey.challenge, request.challenge);
+  assert.equal(options.publicKey.rpId, "keys.example");
+  assert.equal(options.publicKey.userVerification, "required");
+  assert.equal(Object.hasOwn(options.publicKey, "allowCredentials"), false);
+  assert.deepEqual(options.publicKey.extensions.prf.eval.first, prfInput("secret-x", 3));
+  assert.equal(output.key.byteLength, 32);
+  assert.deepEqual(new Uint8Array(output.assertion.clientDataJSON), Uint8Array.of(1, 2, 3));
+  assert.deepEqual(new Uint8Array(prfResult), new Uint8Array(32));
+  output.key.fill(0);
+});
+
+test("approval cancellation and absent PRF output fail before returning a key", async () => {
+  installWebAuthn();
+  const controller = new AbortController();
+  controller.abort();
+  await assert.rejects(createApprovalAssertion({ challenge: new Uint8Array(32), name: "x", revision: 1 }, controller.signal), /cancelled/u);
+
+  installWebAuthn({ prfResult: null });
+  await assert.rejects(
+    createApprovalAssertion({ challenge: new Uint8Array(32), name: "x", revision: 1 }, new AbortController().signal),
+    /32-byte PRF result/u,
+  );
 });

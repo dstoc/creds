@@ -305,15 +305,15 @@ pub fn verify_key_message(
     if bytes.is_empty() || bytes.len() > MAX_MESSAGE_BYTES {
         return Err(invalid("key message is empty or exceeds 16 KiB"));
     }
-    let message: KeyMessage = serde_json::from_slice(bytes)
+    let mut message: KeyMessage = serde_json::from_slice(bytes)
         .map_err(|error| invalid(format!("malformed key message: {error}")))?;
+    let encoded_key = Zeroizing::new(std::mem::take(&mut message.key));
     if message.kind != "key" {
         return Err(invalid("message type must be key"));
     }
     if message.version != 1 {
         return Err(invalid("key message version must be 1"));
     }
-    let key = decode_key(&message.key)?;
     let client_data_json = decode_field("clientDataJSON", &message.assertion.client_data_json)?;
     let authenticator_data =
         decode_field("authenticatorData", &message.assertion.authenticator_data)?;
@@ -327,7 +327,7 @@ pub fn verify_key_message(
         rp_id,
         public_key,
     )?;
-    Ok(key)
+    decode_key(encoded_key.as_str())
 }
 
 #[cfg(test)]
@@ -629,6 +629,17 @@ mod tests {
             .as_ref(),
             &[9_u8; 32]
         );
+        let other_connection_challenge = [0x43; 32];
+        let error = verify_key_message(
+            json.replace(&URL_SAFE_NO_PAD.encode([9_u8; 32]), "not-valid-base64url")
+                .as_bytes(),
+            &other_connection_challenge,
+            ORIGIN,
+            RP_ID,
+            key.verifying_key(),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("challenge"));
         assert!(
             verify_key_message(
                 json.replace(

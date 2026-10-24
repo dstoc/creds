@@ -4,20 +4,36 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="referrer" content="no-referrer">
-    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; base-uri 'none'; form-action 'none'; img-src 'self' data:; script-src 'self'; style-src 'self'; connect-src 'self' https://127.0.0.1:*; object-src 'none'">
-    <title>creds passkey setup and browser probes</title>
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg">
-    <link rel="stylesheet" href="/style.css">
-    <script type="module" src="/js/main.mjs"></script>
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; base-uri 'none'; form-action 'none'; img-src 'self' data:; script-src 'self'; style-src 'self'; connect-src 'self' https://*.keys.example:* https://*.localhost:* https://127.0.0.1:*; object-src 'none'">
+    <title>creds browser approval and setup</title>
+    <link rel="icon" type="image/svg+xml" href="favicon.svg">
+    <link rel="stylesheet" href="style.css">
+    <script type="module" src="js/main.mjs"></script>
   </head>
   <body>
     <main>
       <header>
-        <p class="eyebrow">creds · browser setup</p>
-        <h1>Create a creds passkey</h1>
-        <p class="intro">Create a discoverable ES256 passkey, confirm PRF support, and export its public key for local CLI setup. This page does not store passkeys or setup data.</p>
+        <p id="eyebrow" class="eyebrow">creds · browser setup</p>
+        <h1 id="page-title">Create a creds passkey</h1>
+        <p id="page-intro" class="intro">Create a discoverable ES256 passkey, confirm PRF support, and export its public key for local CLI setup. This page does not store passkeys or setup data.</p>
       </header>
 
+      <section id="approval-panel" aria-labelledby="approval-title" hidden>
+        <h2 id="approval-title">Review approval request</h2>
+        <dl class="request-details">
+          <div><dt>Destination</dt><dd id="request-host"></dd></div>
+          <div><dt>Name</dt><dd id="request-name"></dd></div>
+          <div><dt>Revision</dt><dd id="request-revision"></dd></div>
+          <div><dt>Operation</dt><dd id="request-operation"></dd></div>
+        </dl>
+        <p>Check the destination and exact name before you continue. Approval requires passkey user verification.</p>
+        <div class="actions">
+          <button id="approve-request" type="button">Approve and verify</button>
+          <button id="cancel-request" class="secondary" type="button">Cancel</button>
+        </div>
+      </section>
+
+      <div id="probe-tools">
       <section aria-labelledby="create-passkey-title">
         <h2 id="create-passkey-title">Create passkey</h2>
         <label for="passkey-label">Passkey label</label>
@@ -49,12 +65,13 @@
         <p>This creates one discoverable test credential for RP ID <code>localhost</code> per page session, then targets it explicitly for two PRF assertions. Later checks in the same page reuse the credential in memory. Use the documented virtual authenticator. A real authenticator may retain the test credential until you remove it.</p>
         <button id="test-prf" type="button">Create test credential and evaluate PRF</button>
       </section>
+      </div>
 
       <section class="result" aria-labelledby="result-title">
         <h2 id="result-title">Result</h2>
         <pre id="result" role="status" aria-live="polite">Ready. This page is a local compatibility fixture, not the production approval app.</pre>
       </section>
-      <footer>Local probes do not establish compatibility with real devices, passkey providers, or deployment network paths.</footer>
+      <footer id="page-footer">Local probes do not establish compatibility with real devices, passkey providers, or deployment network paths.</footer>
     </main>
   </body>
 </html>

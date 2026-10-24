@@ -140,9 +140,22 @@ impl SecretWriter {
 
     /// Publish a fully encrypted replacement while this value still owns the lock.
     pub fn publish(self, plaintext: &[u8], key: &[u8; 32]) -> Result<(), StoreError> {
+        self.publish_with_cancel(plaintext, key, || false)
+    }
+
+    /// Publish unless cancellation arrives before the atomic rename commit point.
+    pub fn publish_with_cancel<F>(
+        self,
+        plaintext: &[u8],
+        key: &[u8; 32],
+        is_cancelled: F,
+    ) -> Result<(), StoreError>
+    where
+        F: FnOnce() -> bool,
+    {
         let envelope = Envelope::encrypt(&self.name, self.revision, plaintext, key)?;
         let bytes = envelope.to_json()?;
-        publish_envelope(&self.storage_dir, &self.name, &bytes)
+        publish_envelope_with_cancel(&self.storage_dir, &self.name, &bytes, is_cancelled)
     }
 }
 
@@ -247,11 +260,20 @@ fn create_temp_file(storage_dir: &Path, name: &str) -> io::Result<(PathBuf, File
     ))
 }
 
-fn publish_envelope(storage_dir: &Path, name: &str, bytes: &[u8]) -> Result<(), StoreError> {
+fn publish_envelope_with_cancel<F>(
+    storage_dir: &Path,
+    name: &str,
+    bytes: &[u8],
+    is_cancelled: F,
+) -> Result<(), StoreError>
+where
+    F: FnOnce() -> bool,
+{
     publish_envelope_with(
         storage_dir,
         name,
         bytes,
+        is_cancelled,
         |file, contents| file.write_all(contents),
         sync_directory,
     )
@@ -261,6 +283,7 @@ fn publish_envelope_with<W, S>(
     storage_dir: &Path,
     name: &str,
     bytes: &[u8],
+    is_cancelled: impl FnOnce() -> bool,
     write_staging: W,
     sync_dir: S,
 ) -> Result<(), StoreError>
@@ -279,6 +302,13 @@ where
         .and_then(|()| temp_file.sync_all());
     drop(temp_file);
     staging_result?;
+    if is_cancelled() {
+        return Err(io::Error::new(
+            io::ErrorKind::Interrupted,
+            "encryption was cancelled before publication",
+        )
+        .into());
+    }
     fs::rename(&temp_guard.path, &target)?;
     temp_guard.published = true;
     sync_dir(storage_dir).map_err(StoreError::PublishedButDurabilityUncertain)
@@ -503,6 +533,7 @@ mod tests {
             dir.path(),
             "secret",
             &envelope.to_json().unwrap(),
+            || false,
             |file, bytes| {
                 file.write_all(&bytes[..bytes.len() / 2])?;
                 Err(io::Error::other("injected staging failure"))
@@ -513,6 +544,28 @@ mod tests {
         assert_eq!(fs::read(path).unwrap(), old);
         let entries = fs::read_dir(dir.path()).unwrap().count();
         assert_eq!(entries, 2, "only envelope and stable lock remain");
+    }
+
+    #[test]
+    fn cancellation_before_rename_preserves_old_envelope_and_cleans_temp() {
+        let dir = TestDir::new();
+        let key = [0x24; 32];
+        SecretWriter::begin(dir.path(), "secret")
+            .unwrap()
+            .publish(b"old", &key)
+            .unwrap();
+        let path = dir.path().join("secret.json");
+        let old = fs::read(&path).unwrap();
+        let result = SecretWriter::begin(dir.path(), "secret")
+            .unwrap()
+            .publish_with_cancel(b"new", &key, || true);
+        assert!(matches!(
+            result,
+            Err(StoreError::Io(error)) if error.kind() == io::ErrorKind::Interrupted
+        ));
+        assert_eq!(fs::read(&path).unwrap(), old);
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 2);
+        assert!(SecretWriter::begin(dir.path(), "secret").is_ok());
     }
 
     #[test]
@@ -528,6 +581,7 @@ mod tests {
             dir.path(),
             "secret",
             &envelope.to_json().unwrap(),
+            || false,
             |file, bytes| file.write_all(bytes),
             |_| Err(io::Error::other("injected directory sync failure")),
         );
