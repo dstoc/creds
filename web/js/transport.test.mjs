@@ -90,7 +90,7 @@ test("handoff fragment combines the machine label with the configured suffix, in
   ), /hostname is too long/u);
 });
 
-test("request parser rejects duplicate, unknown, cross-purpose, and malformed fields", () => {
+test("request parser validates JSON, shape, fields, types, and protocol values", () => {
   const parsed = parseRequestMessage(requestBody, requestBytes);
   assert.equal(parsed.name, "secret-x");
   assert.equal(parsed.revision, 2);
@@ -102,16 +102,45 @@ test("request parser rejects duplicate, unknown, cross-purpose, and malformed fi
   assert.equal(shorterWindow.approvalTimeoutMs, 90_000);
 
   const good = JSON.parse(new TextDecoder().decode(requestBody));
-  const duplicate = new TextEncoder().encode(
-    `{"type":"request","version":1,"name":"secret-x","na\\u006de":"other","revision":2,"operation":"decrypt","challenge":"${encodeBase64Url(challengeBytes)}","approvalTimeoutMs":120000}`,
-  );
-  assert.throws(() => parseRequestMessage(duplicate, requestBytes), /Duplicate JSON field name/u);
+  const encode = (request) => new TextEncoder().encode(typeof request === "string" ? request : JSON.stringify(request));
+  assert.throws(() => parseRequestMessage(encode('{"type":'), requestBytes), /not valid JSON/u);
+  for (const shape of ["null", "[]", '"request"', "1", "true"]) {
+    assert.throws(() => parseRequestMessage(encode(shape), requestBytes), /JSON object/u);
+  }
+
+  assert.throws(() => parseRequestMessage(encode(Object.fromEntries(Object.entries(good).filter(([field]) => field !== "name"))), requestBytes), /fields/u);
   assert.throws(() => parseRequestMessage(new TextEncoder().encode(JSON.stringify({ ...good, extra: true })), requestBytes), /fields/u);
+  for (const [field, value] of [
+    ["type", 1],
+    ["version", "1"],
+    ["name", null],
+    ["revision", "2"],
+    ["operation", false],
+    ["challenge", null],
+    ["approvalTimeoutMs", "120000"],
+  ]) {
+    assert.throws(() => parseRequestMessage(encode({ ...good, [field]: value }), requestBytes), new RegExp(`${field} must be a`, "u"));
+  }
+
+  assert.throws(() => parseRequestMessage(encode({ ...good, type: "hello" }), requestBytes), /type and version/u);
+  assert.throws(() => parseRequestMessage(encode({ ...good, version: 2 }), requestBytes), /type and version/u);
+  assert.throws(() => parseRequestMessage(encode({ ...good, name: "bad name" }), requestBytes), /Name/u);
+  assert.throws(() => parseRequestMessage(encode({ ...good, revision: 0 }), requestBytes), /Revision/u);
+  assert.throws(() => parseRequestMessage(encode({ ...good, operation: "setup" }), requestBytes), /operation must be encrypt or decrypt/u);
   assert.throws(() => parseRequestMessage(new TextEncoder().encode(JSON.stringify({ ...good, approvalTimeoutMs: 0 })), requestBytes), /1 through 120000/u);
   assert.throws(() => parseRequestMessage(new TextEncoder().encode(JSON.stringify({ ...good, approvalTimeoutMs: 120_001 })), requestBytes), /1 through 120000/u);
+  assert.throws(() => parseRequestMessage(encode({ ...good, challenge: "not-base64url" }), requestBytes));
+  assert.throws(() => parseRequestMessage(encode({ ...good, challenge: encodeBase64Url(new Uint8Array(31)) }), requestBytes), /challenge must be 32 bytes/u);
   assert.throws(() => parseRequestMessage(requestBody, challengeBytes), /distinct/u);
   assert.throws(() => parseRequestMessage(new Uint8Array(0), requestBytes), /empty/u);
   assert.throws(() => parseRequestMessage(new Uint8Array(16 * 1024 + 1), requestBytes), /16 KiB/u);
+});
+
+test("request parser follows JSON.parse last-value behavior for duplicate members", () => {
+  const duplicateName = new TextEncoder().encode(
+    `{"type":"request","version":1,"name":"other","na\\u006de":"secret-x","revision":2,"operation":"decrypt","challenge":"${encodeBase64Url(challengeBytes)}","approvalTimeoutMs":120000}`,
+  );
+  assert.equal(parseRequestMessage(duplicateName, requestBytes).name, "secret-x");
 });
 
 test("length-prefixed frames use a four-byte unsigned big-endian size and enforce bounds", () => {

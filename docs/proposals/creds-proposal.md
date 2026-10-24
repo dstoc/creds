@@ -180,7 +180,7 @@ Use `serverCertificateHashes` to pin the SHA-256 certificate hash. The CLI accep
 
 ### Wire protocol and approval
 
-Use one bidirectional reliable WebTransport stream and three messages, each encoded as a four-byte unsigned big-endian length followed by UTF-8 JSON. Bound each body to 16 KiB and each decoded assertion byte field to 4 KiB; the key is exactly 32 bytes. Reject additional streams, unknown message types, duplicate fields, unexpected messages, invalid lengths and malformed payloads. All binary fields use unpadded base64url.
+Use one bidirectional reliable WebTransport stream and three messages, each encoded as a four-byte unsigned big-endian length followed by UTF-8 JSON. Bound each body to 16 KiB and each decoded assertion byte field to 4 KiB; the key is exactly 32 bytes. Reject additional streams, unknown message types, unexpected messages, invalid lengths and malformed payloads. All binary fields use unpadded base64url. The browser parses request messages from the certificate-pinned CLI with `JSON.parse`, then validates the expected fields, types and protocol values. As usual, `JSON.parse` keeps the last value when an object contains duplicate member names. This behavior is acceptable because the CLI is trusted at this connection boundary. The CLI parser for browser messages rejects duplicate fields because those messages come from an untrusted client.
 
 ```text
 Browser → CLI: {"type":"hello","version":1,"request":"..."}
