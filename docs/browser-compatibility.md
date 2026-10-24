@@ -1,6 +1,18 @@
-# Local browser compatibility probes
+# Development-only browser compatibility checks
 
-These experiments cover the local browser probes and the first authenticated handoff implementation. The Rust listener and Python static-file server run on loopback. They do not provide an application backend.
+The production browser app lives in `web/`. It contains the user-facing Create passkey setup flow and the approval flow. It does not contain compatibility controls or test-passkey creation. The compatibility fixture page and its JavaScript live under `dev/browser-compatibility/`; the WebTransport echo listener is the feature-gated `creds-probe-server` development binary. These tools use loopback only and do not provide an application backend.
+
+Do not publish `dev/`. The default `creds` CLI supports `setup`, `check`, `encrypt`, and `decrypt`. Build the echo fixture only for local experiments with `--features dev-tools`.
+
+## Automated coverage
+
+Run the required CI command from the repository root:
+
+```sh
+./scripts/test.sh
+```
+
+It checks the production CLI help and rejected `probe-server` command, scans production HTML/modules for test-passkey and probe hooks, exercises the separate dev page and its JavaScript modules, builds and tests the feature-gated Rust echo binary, and runs the normal Rust, Node.js, and static-server tests. The Rust `command_flow` integration tests exercise the production CLI and a real loopback WebTransport client with protocol fixtures. They do not exercise browser WebAuthn or a physical passkey.
 
 ## Observed runner results
 
@@ -14,62 +26,32 @@ Run date: 2026-10-24.
 | Node.js | 24.17.0 |
 | Python | 3.13.5 |
 
-## Automated browser coverage
+Chromium connected to the local `wtransport` echo server with the printed SHA-256 certificate hash. It opened a bidirectional stream, sent the fixed test message, and received the exact echo. With one bit changed in the expected hash, the session failed with `WebTransportError: Opening handshake failed`; the console reported `QUIC_TLS_CERTIFICATE_UNKNOWN`. The positive case completed first against the same endpoint.
 
-`./scripts/test.sh` runs the browser-module tests under Node.js. `main.test.mjs` uses a lightweight fake DOM and mocked handoff sessions to cover request display, cancel during connection and WebAuthn, session loss, and the one-approval send path. `transport.test.mjs` uses a mocked WebTransport implementation for framing, pin configuration, extra data, and failure handling. It also checks that the machine label combines with a deployment-configured suffix that differs from the approval hostname, and that malformed suffixes and QR destination/suffix/path overrides fail. `webauthn.test.mjs` supplies mocked WebAuthn responses for PRF and assertion construction. These tests check application control flow; they do not stand in for a browser or authenticator.
+The local self-signed certificate was permitted with Chromium's `--ignore-certificate-errors` test setting. The mismatched pin still failed. The setting permits the local test certificate; it does not replace the `serverCertificateHashes` check.
 
-The Rust `command_flow` integration test starts the compiled CLI and connects a Rust WebTransport client to the actual loopback listener. It covers file and stdin/stdout flows, replacement snapshots, rejected assertions, mismatched keys, cancellation, and preservation of existing ciphertext and output files. Its deterministic signing key and generated assertion are protocol fixtures; this test does not exercise browser WebAuthn or a passkey device.
+The development page created a discoverable ES256 test credential for RP ID `localhost`, then requested two PRF assertions with the same input and explicit credential ID. Chromium reported PRF enabled, returned 32 bytes on both assertions, and the outputs matched. The CDP virtual CTAP 2.1 authenticator supported resident keys, user verification, automatic presence, and PRF. This did not test a physical authenticator or passkey provider.
 
-The Chromium experiments below exercise WebTransport, WebAuthn, PRF, and public-key export through Chromium's real APIs with a CDP-controlled virtual CTAP 2.1 authenticator. They remain loopback tests with a virtual authenticator. Physical passkeys, provider-specific PRF behavior, cross-device use, deployment DNS, and deployed UDP reachability remain manual compatibility checks.
+The production Create passkey flow was also exercised with Chromium 156 and the virtual authenticator. It created a discoverable ES256 passkey with required user verification, no attestation, and PRF support. The browser returned algorithm `-7` and DER SubjectPublicKeyInfo bytes; the page displayed the unpadded base64url key. `creds setup` accepted the key and `creds check` reported its fingerprint.
 
-### WebTransport and certificate hash
+A Chromium virtual-authenticator handoff also completed encryption and decryption through the production approval flow. The browser used the pinned per-operation listener, displayed the request, and required an explicit approval click. These loopback results do not establish physical-device behavior, passkey-provider compatibility, deployment DNS, local-network prompts, or deployed UDP reachability. The runner had no physical authenticator or deployed network. In this runner, `chrome-devtools start` returned without a running daemon; direct CDP WebSocket control was used for the recorded checks.
 
-Chromium connected to the Rust `wtransport` listener with the printed SHA-256 certificate hash. It opened a bidirectional stream, sent the fixed probe message, and received the exact echo. This exercised Chromium's WebTransport API and a real local HTTP/3/WebTransport session. The listener does not implement the creds wire protocol.
+## Reproduce the development probes
 
-Chromium then tried the same URL with one bit changed in the expected certificate hash. The session failed with `WebTransportError: Opening handshake failed`; the browser console reported `QUIC_TLS_CERTIFICATE_UNKNOWN`. The positive case completed first against the same live endpoint.
+Use separate terminals from the repository root. Keep each server and helper open during the experiment.
 
-The local self-signed certificate was permitted with the browser's local insecure-certificate test setting (`--ignore-certificate-errors` for direct Chromium launch, and `--acceptInsecureCerts true` in the Chrome DevTools controlled context). The mismatched hash still failed in both checks. These settings permit the local test certificate; they do not replace the `serverCertificateHashes` check. The authenticated handoff below also uses the hash pin and checks the configured Origin.
-
-Run date: 2026-10-24. Chromium 156 also connected from the local static page at `http://localhost:8000` to `https://workstation.tailnet.example.net:<port>/key`. A Chromium host resolver rule mapped that example machine hostname to loopback. The server certificate name did not match the machine hostname; the matching SHA-256 hash succeeded and a one-bit pin change failed. This exercised a local WebTransport echo with separate app and machine hostnames. It did not exercise the creds approval protocol, a tailnet resolver, or deployed UDP reachability.
-
-### WebAuthn PRF
-
-The page created a discoverable ES256 test credential for RP ID `localhost`, then called `navigator.credentials.get()` twice with the same PRF input. Each assertion names the credential held in the current page session with `allowCredentials`. This avoids an authenticator account chooser when the virtual authenticator holds multiple test credentials. Later PRF checks in the same page reuse the in-memory credential. Chromium reported PRF enabled, returned 32 bytes on both assertions, and the page confirmed that both results matched.
-
-This used the real Chromium WebAuthn and PRF APIs with a CDP-controlled virtual CTAP 2.1 authenticator. The virtual authenticator had resident-key, user-verification, automatic-presence, and PRF support enabled. The browser generated the credential and authenticator responses. This was not a JavaScript mock, a physical authenticator, or a real passkey-provider test. The page keeps the test credential object in memory for repeat checks, zeroes its in-page PRF result copies after comparison, and writes nothing to browser storage.
-
-The PRF input in this probe is a local test string. This check does not verify discoverable credential selection without `allowCredentials`, the proposal's production key derivation, assertion verification, or byte-level vectors.
-
-### Passkey creation and public-key export
-
-Run date: 2026-10-24. Chromium 156 created a discoverable ES256 credential through the **Create passkey** action with required user verification, no attestation, and the PRF extension. The page confirmed that PRF returned 32 bytes. `getPublicKeyAlgorithm()` returned `-7`, and `getPublicKey()` returned DER SubjectPublicKeyInfo bytes that the page displayed as unpadded base64url. The exported key was accepted by `creds setup`, and `creds check` reported its SHA-256 fingerprint.
-
-This used the real Chromium WebAuthn APIs with a temporary CDP-controlled CTAP 2.1 virtual authenticator configured for resident keys, user verification, automatic presence, and PRF. This does not establish physical authenticator, passkey-provider, or cross-device compatibility.
-
-### Authenticated handoff
-
-Run date: 2026-10-24. Chromium 156 connected to a per-operation Rust WebTransport listener with the certificate hash from the QR fragment. The page removed the fragment, displayed `workstation.localhost`, the exact name, revision, and operation, and required an explicit approval click. The configured Origin was `https://localhost:8000`. The CLI accepted the assertion from the same connection, encrypted revision 1, then decrypted it in a second approved operation. The decrypted output matched the source byte-for-byte, including a NUL byte.
-
-This used the CDP-controlled CTAP 2.1 virtual authenticator with PRF support. The local app configuration used `localhost` as its machine DNS suffix. The runner's system resolver did not resolve `workstation.localhost`; Chromium needed `--host-resolver-rules='MAP workstation.localhost 127.0.0.1'`. That local mapping made the loopback smoke test possible. It does not establish that deployment DNS or UDP reachability works.
-
-The installed `chrome-devtools` 1.12.0 CLI returned after `start`, and `status` reported no running daemon in this runner. The page action was exercised through a direct CDP WebSocket connection instead. The runner had no physical authenticator or deployed network to test.
-
-## Reproduce the probes
-
-Use five terminals from the repository root. Keep each long-running process open during the experiment.
-
-1. Start the Rust listener:
+1. Start the feature-gated Rust WebTransport echo fixture:
 
    ```sh
-   cargo run --locked -- probe-server
+   cargo run --locked --features dev-tools --bin creds-probe-server
    ```
 
    Copy the printed `server_url` and `certificate_sha256_base64url` values.
 
-2. Serve the static page on loopback. `localhost` is a secure context in Chromium:
+2. Serve the development fixture on loopback. `localhost` is a secure context in Chromium:
 
    ```sh
-   python3 scripts/serve.py
+   python3 scripts/serve.py --root dev/browser-compatibility
    ```
 
 3. Start Chromium with a temporary profile and a local debugging port:
@@ -80,56 +62,40 @@ Use five terminals from the repository root. Keep each long-running process open
      --no-first-run --no-default-browser-check about:blank
    ```
 
-   `--ignore-certificate-errors` permits the local self-signed listener certificate. The page still checks the supplied certificate hash, including the negative case below.
+   The browser flag permits the local self-signed listener certificate. The probe still verifies the supplied pin, including the mismatch case.
 
-4. Enable a virtual authenticator for the browser's current page:
+4. In another terminal, enable a virtual authenticator:
 
    ```sh
    node scripts/virtual-authenticator.mjs
    ```
 
-   The helper uses Chromium's DevTools Protocol and stays open until Ctrl-C. It enables a CTAP 2.1 virtual authenticator with PRF, resident-key, and user-verification support. It removes the virtual authenticator when stopped. For a fresh test session, stop Chromium and this helper, then start them again.
+   The helper uses Chromium's DevTools Protocol. It enables a CTAP 2.1 virtual authenticator with PRF, resident-key, and user-verification support, then removes it when stopped. For a fresh test session, restart Chromium and the helper.
 
-5. Connect chrome-devtools to that Chromium instance and run both WebTransport cases:
+5. Connect `chrome-devtools` to Chromium and open the development fixture:
 
    ```sh
-   chrome-devtools start --browserUrl http://127.0.0.1:9222 \
-     --usageStatistics false
+   chrome-devtools start --browserUrl http://127.0.0.1:9222 --usageStatistics false
    chrome-devtools list_pages --output-format json
    chrome-devtools navigate_page 1 --url http://localhost:8000
-   chrome-devtools evaluate_script \
-     'async () => {
-       const endpoint = "https://127.0.0.1:PORT/key";
-       const pin = "BASE64URL_HASH_FROM_CREDS";
-       document.querySelector("#endpoint").value = endpoint;
-       document.querySelector("#certificate-hash").value = pin;
-       document.querySelector("#positive-pin").click();
-       await new Promise(resolve => setTimeout(resolve, 2000));
-       const positive = document.querySelector("#result").textContent;
-       document.querySelector("#negative-pin").click();
-       await new Promise(resolve => setTimeout(resolve, 2000));
-       return { positive, negative: document.querySelector("#result").textContent };
-     }' --pageId 1 --output-format json
    ```
 
-   Run these commands in the same terminal session. Replace `PORT` and `BASE64URL_HASH_FROM_CREDS` with the listener output. Both page actions report `PASS` when the matching hash connects and the altered hash fails.
+   Enter the printed endpoint and certificate hash in the page. Click **Test matching pin and echo**, then **Test mismatched pin**. The first action must report an echoed message. The second must report that Chromium rejected the changed certificate hash.
 
-6. Run the PRF check on the same page. For a manual click, get the current button UID from a fresh `take_snapshot` result. Or invoke the page action from `evaluate_script`:
+6. Click **Create test credential and evaluate PRF**. Chromium asks the virtual authenticator to create a test credential on the development page's RP ID. The result should report `registrationPrfEnabled: true`, `resultLengthBytes: 32`, and `repeatedResultMatched: true`. The page holds the test credential only in memory for the page session. A physical authenticator may retain a credential created by this experiment.
 
-   ```sh
-   chrome-devtools evaluate_script \
-     'async () => { document.querySelector("#test-prf").click(); await new Promise(resolve => setTimeout(resolve, 8000)); return document.querySelector("#result").textContent; }' \
-     --pageId 1 --output-format json
-   ```
+## Check the production setup page
 
-   The expected result includes `registrationPrfEnabled: true`, `resultLengthBytes: 32`, and `repeatedResultMatched: true`.
+Serve the production app separately:
 
-7. On the same page, create and export a setup key. Use the current UID from a fresh snapshot and click **Create passkey and export public key**. The browser creates a new discoverable passkey and requests user verification. The page reports success after PRF evaluation and displays the unpadded base64url DER SPKI key in a read-only field. Use **Copy public key** or select the field and copy it into `creds setup`.
+```sh
+python3 scripts/serve.py --port 8001
+```
 
-The Python server adds CSP, `frame-ancestors 'none'`, `nosniff`, and referrer-policy headers. Automated tests check these headers, the JavaScript module MIME type, and 404 behavior for a missing module. `frame-ancestors` must be sent as an HTTP response header; the HTML meta policy does not replace it. Use the [deployment guide](deployment.md) for production response headers and DNS suffix setup. The server serves only static files from `web/` and listens on loopback port 8000. For a local HTTPS page, pass `--tls-cert` and `--tls-key` to `scripts/serve.py`.
+Open `http://localhost:8001` in the same Chromium session and use **Create passkey and export public key**. This is the product setup flow, not a test-passkey probe. The page should show the unpadded base64url DER SPKI key after user verification and PRF confirmation. Copy the public key into `creds setup` when testing a local CLI configuration.
+
+The static server adds CSP, `frame-ancestors 'none'`, `nosniff`, and referrer-policy headers. Tests check these headers, JavaScript module MIME types, missing-module 404 behavior, and that the development page is served from an explicit root separate from the default production `web/` root. For production response headers and DNS configuration, use the [deployment guide](deployment.md).
 
 ## Limits and later checks
 
-This runner has no real user device, physical authenticator, passkey-provider account, or deployment UDP network. These results establish only the local Chromium behavior listed above.
-
-Before release, manually check passkey creation, public-key export, approval, wrong-passkey failure, and repeat decryption with each intended browser and authenticator combination. Also check local-network permission prompts and UDP reachability from a separate device to the deployed HTTPS origin. Do not infer device or network support from the virtual authenticator or loopback transport tests.
+The runner has no physical authenticator, passkey-provider account, or deployment UDP network. Before release, manually check passkey creation and export, approval, wrong-passkey failure, and repeat decryption with each intended browser and authenticator combination. Also check local-network permission prompts and UDP reachability from a separate device on the deployed network. Do not infer device or network support from the virtual authenticator or loopback transport tests.

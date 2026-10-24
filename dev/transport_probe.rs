@@ -11,7 +11,12 @@ use wtransport::{Endpoint, Identity, ServerConfig};
 const PROBE_MESSAGE: &[u8] = b"creds-browser-transport-probe-v1";
 const MAX_PROBE_BYTES: usize = 128;
 
-pub async fn serve() -> Result<(), Box<dyn Error>> {
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn Error>> {
+    run().await
+}
+
+async fn run() -> Result<(), Box<dyn Error>> {
     let identity = Identity::self_signed(["localhost", "127.0.0.1", "::1"])?;
     let certificate = &identity.certificate_chain().as_slice()[0];
     let certificate_hash = base64url_sha256(certificate.der());
@@ -27,7 +32,9 @@ pub async fn serve() -> Result<(), Box<dyn Error>> {
     println!("server_url=https://127.0.0.1:{port}/key");
     println!("certificate_sha256_base64url={certificate_hash}");
     eprintln!("Waiting for a local browser WebTransport probe. Ctrl-C stops the server.");
-    eprintln!("This echo endpoint is a test fixture; it does not implement the creds protocol.");
+    eprintln!(
+        "This echo endpoint is a development fixture; it does not implement the creds protocol."
+    );
 
     loop {
         let incoming_session = endpoint.accept().await;

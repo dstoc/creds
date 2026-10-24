@@ -7,73 +7,9 @@ import {
   encodeFrame,
   parseHandoffFragment,
   parseRequestMessage,
-  testMismatchedPin,
-  testPinnedEcho,
 } from "./transport.mjs";
 
-const MESSAGE = new TextEncoder().encode("creds-browser-transport-probe-v1");
 const PIN = encodeBase64Url(new Uint8Array(32));
-const ENDPOINT = "https://127.0.0.1:4443/key";
-
-async function withWebTransportChunks(chunks, run) {
-  const originalDescriptor = Object.getOwnPropertyDescriptor(globalThis, "WebTransport");
-  globalThis.WebTransport = class {
-    constructor() {
-      this.ready = Promise.resolve();
-    }
-
-    async createBidirectionalStream() {
-      return {
-        writable: {
-          getWriter: () => ({
-            write: async () => {},
-            close: async () => {},
-          }),
-        },
-        readable: new ReadableStream({
-          start(controller) {
-            for (const chunk of chunks) controller.enqueue(chunk);
-            controller.close();
-          },
-        }),
-      };
-    }
-
-    close() {}
-  };
-
-  try {
-    return await run();
-  } finally {
-    if (originalDescriptor) {
-      Object.defineProperty(globalThis, "WebTransport", originalDescriptor);
-    } else {
-      delete globalThis.WebTransport;
-    }
-  }
-}
-
-test("pinned echo accepts the complete response across multiple reads", async () => {
-  await withWebTransportChunks([MESSAGE.slice(0, 10), MESSAGE.slice(10)], async () => {
-    assert.deepEqual(await testPinnedEcho(ENDPOINT, PIN), {
-      matchedPin: true,
-      echoMatched: true,
-    });
-  });
-});
-
-test("pinned echo rejects a response truncated at EOF", async () => {
-  await withWebTransportChunks([MESSAGE.slice(0, -1)], async () => {
-    await assert.rejects(testPinnedEcho(ENDPOINT, PIN), /truncated echo/u);
-  });
-});
-
-test("pinned echo rejects response data beyond the expected message", async () => {
-  const extraByte = Uint8Array.of(0);
-  await withWebTransportChunks([MESSAGE, extraByte], async () => {
-    await assert.rejects(testPinnedEcho(ENDPOINT, PIN), /extra probe data/u);
-  });
-});
 
 const requestBytes = Uint8Array.from({ length: 32 }, (_, index) => index + 1);
 const challengeBytes = Uint8Array.from({ length: 32 }, (_, index) => index + 65);
@@ -244,30 +180,6 @@ test("approval opens one stream with the exact certificate pin and handles split
     const response = JSON.parse(new TextDecoder().decode(writes[1].subarray(4)));
     assert.equal(response.type, "key");
     assert.equal(response.key, encodeBase64Url(key));
-  } finally {
-    if (originalDescriptor) Object.defineProperty(globalThis, "WebTransport", originalDescriptor);
-    else delete globalThis.WebTransport;
-  }
-});
-
-test("a rejected certificate pin is a terminal connection failure", async () => {
-  const originalDescriptor = Object.getOwnPropertyDescriptor(globalThis, "WebTransport");
-  let options;
-  class RejectingWebTransport {
-    constructor(_url, transportOptions) {
-      options = transportOptions;
-      this.ready = Promise.reject(new Error("certificate pin mismatch"));
-    }
-
-    close() {}
-  }
-  globalThis.WebTransport = RejectingWebTransport;
-  try {
-    const outcome = await testMismatchedPin("https://127.0.0.1:4443/key", pinText);
-    assert.equal(outcome.mismatchRejected, true);
-    const sentPin = options.serverCertificateHashes[0].value;
-    assert.equal(sentPin.byteLength, 32);
-    assert.notDeepEqual(sentPin, decodeBase64Url(pinText));
   } finally {
     if (originalDescriptor) Object.defineProperty(globalThis, "WebTransport", originalDescriptor);
     else delete globalThis.WebTransport;

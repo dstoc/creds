@@ -1,5 +1,3 @@
-mod probe;
-
 use creds::{
     config,
     handoff::{self, Operation},
@@ -17,7 +15,7 @@ use tokio::sync::watch;
 type ParsedArgs = (String, Vec<OsString>, Option<PathBuf>);
 
 fn usage() -> &'static str {
-    "usage: creds [--config PATH] <setup|check|probe-server|encrypt NAME INPUT|decrypt NAME OUTPUT>"
+    "usage: creds [--config PATH] <setup|check|encrypt NAME INPUT|decrypt NAME OUTPUT>"
 }
 
 fn parse_args() -> Result<ParsedArgs, Box<dyn Error>> {
@@ -74,11 +72,11 @@ fn parse_args() -> Result<ParsedArgs, Box<dyn Error>> {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     let (command, extra, explicit_config_path) = parse_args()?;
+    if command == "--help" || command == "-h" {
+        println!("{}", usage());
+        return Ok(());
+    }
     match command.as_str() {
-        "probe-server" => {
-            require_no_extra(&extra)?;
-            probe::serve().await?;
-        }
         "setup" => {
             require_no_extra(&extra)?;
             let path = match explicit_config_path {

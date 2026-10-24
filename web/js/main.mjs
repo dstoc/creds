@@ -1,22 +1,17 @@
 import {
   connectHandoff,
   parseHandoffFragment,
-  testMismatchedPin,
-  testPinnedEcho,
 } from "./transport.mjs";
-import { createApprovalAssertion, createPasskey, testPrfApi } from "./webauthn.mjs";
+import { createApprovalAssertion, createPasskey } from "./webauthn.mjs";
 
 const result = document.querySelector("#result");
 const buttons = [...document.querySelectorAll("button")];
 const approvalPanel = document.querySelector("#approval-panel");
-const probeTools = document.querySelector("#probe-tools");
+const setupPanel = document.querySelector("#setup-panel");
 const approveButton = document.querySelector("#approve-request");
 const cancelButton = document.querySelector("#cancel-request");
-const endpointInput = document.querySelector("#endpoint");
-const hashInput = document.querySelector("#certificate-hash");
 const passkeyLabelInput = document.querySelector("#passkey-label");
 const publicKeyInput = document.querySelector("#public-key");
-let matchingPinTarget = null;
 let approvalSession = null;
 let approvalController = null;
 let connectionController = null;
@@ -68,7 +63,7 @@ function expireApproval() {
 
 async function run(button, action) {
   buttons.forEach((item) => { item.disabled = true; });
-  show("Running browser API probe…");
+  show("Waiting for browser approval…");
   try {
     show(await action());
   } catch (error) {
@@ -102,34 +97,6 @@ document.querySelector("#copy-public-key").addEventListener("click", async () =>
   }
 });
 
-document.querySelector("#positive-pin").addEventListener("click", (event) => run(event.currentTarget, async () => {
-  const endpoint = endpointInput.value;
-  const hash = hashInput.value;
-  const value = await testPinnedEcho(endpoint, hash);
-  matchingPinTarget = `${endpoint}\0${hash}`;
-  return `PASS: Chromium established a pinned WebTransport session and echoed the probe stream.\n${JSON.stringify(value, null, 2)}`;
-}));
-
-document.querySelector("#negative-pin").addEventListener("click", (event) => run(event.currentTarget, async () => {
-  const endpoint = endpointInput.value;
-  const hash = hashInput.value;
-  if (matchingPinTarget !== `${endpoint}\0${hash}`) {
-    throw new Error("First pass the matching-pin test with this endpoint and certificate hash.");
-  }
-  const value = await testMismatchedPin(
-    endpoint,
-    hash,
-  );
-  if (!value.mismatchRejected) throw new Error("The browser accepted a deliberately mismatched certificate hash.");
-  return `PASS: Chromium rejected a WebTransport connection with the altered certificate hash.\n${JSON.stringify(value, null, 2)}`;
-}));
-
-for (const input of [endpointInput, hashInput]) {
-  input.addEventListener("input", () => { matchingPinTarget = null; });
-}
-
-document.querySelector("#test-prf").addEventListener("click", (event) => run(event.currentTarget, testPrfApi));
-
 async function startApprovalFlow() {
   if (!location.hash) return;
 
@@ -137,7 +104,7 @@ async function startApprovalFlow() {
   history.replaceState(null, "", `${location.pathname}${location.search}`);
   approvalPanel.hidden = false;
   approveButton.disabled = true;
-  probeTools.hidden = true;
+  setupPanel.hidden = true;
   document.querySelector("#eyebrow").textContent = "creds · request approval";
   document.querySelector("#page-title").textContent = "Approve a creds request";
   document.querySelector("#page-intro").textContent = "Review the machine, name, revision, and operation before you approve with your passkey.";

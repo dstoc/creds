@@ -5,10 +5,13 @@ from threading import Thread
 from urllib.error import HTTPError
 from urllib.request import urlopen
 
-from serve import ProbeHandler, ROOT
+from serve import ROOT, StaticHandler
 
 
-class QuietProbeHandler(ProbeHandler):
+DEV_ROOT = ROOT.parent / "dev" / "browser-compatibility"
+
+
+class QuietStaticHandler(StaticHandler):
     def log_message(self, format, *args):
         pass
 
@@ -18,7 +21,7 @@ class StaticServerTests(unittest.TestCase):
     def setUpClass(cls):
         cls.server = ThreadingHTTPServer(
             ("127.0.0.1", 0),
-            partial(QuietProbeHandler, directory=str(ROOT)),
+            partial(QuietStaticHandler, directory=str(ROOT)),
         )
         cls.thread = Thread(target=cls.server.serve_forever, daemon=True)
         cls.thread.start()
@@ -61,6 +64,28 @@ class StaticServerTests(unittest.TestCase):
         with self.assertRaises(HTTPError) as raised:
             urlopen(f"{self.base_url}/js/missing.mjs")
         self.assertEqual(raised.exception.code, 404)
+
+    def test_development_compatibility_page_is_separate_from_default_web_root(self):
+        server = ThreadingHTTPServer(
+            ("127.0.0.1", 0),
+            partial(QuietStaticHandler, directory=str(DEV_ROOT)),
+        )
+        thread = Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        base_url = f"http://127.0.0.1:{server.server_port}"
+        try:
+            with urlopen(f"{base_url}/") as response:
+                page = response.read().decode("utf-8")
+                self.assertIn("frame-ancestors 'none'", response.headers["Content-Security-Policy"])
+            self.assertIn("Development-only browser compatibility probes", page)
+            self.assertIn("Create test credential and evaluate PRF", page)
+            self.assertNotIn("Review approval request", page)
+            with urlopen(f"{base_url}/transport-probe.mjs") as module:
+                self.assertTrue(module.headers.get("Content-Type", "").startswith("text/javascript"))
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join()
 
 
 if __name__ == "__main__":

@@ -16,6 +16,6 @@ Run the same command used by GitHub Actions:
 ./scripts/test.sh
 ```
 
-## Browser compatibility probes
+## Development-only compatibility checks
 
-See [browser compatibility notes](docs/browser-compatibility.md) for local WebTransport certificate-pin checks, passkey creation/export and PRF checks, observed versions, reproducible procedures, and runner limitations. The `creds probe-server` command is a loopback-only echo fixture for that experiment. It is not a production service or an alternate transport.
+See [browser compatibility notes](docs/browser-compatibility.md) for local WebTransport certificate-pin checks, test-passkey PRF checks, observed results, and Chromium instructions. The page and feature-gated `creds-probe-server` binary are development tools under `dev/`; they are excluded from the published `web/` directory and the default CLI build. The normal Create passkey setup flow remains in the production browser app.

@@ -11,6 +11,8 @@ The browser app does not need an API server, account service, database, or JavaS
 
 Copy the contents of the repository's web directory to the document root of a static HTTPS host. Serve the files as files. Do not add a service worker, backend route, third-party script, analytics, remote font, or CDN dependency. Keep the approval app on one stable hostname because that hostname is both the browser origin host and the WebAuthn RP ID. Configure the machine DNS suffix separately in the trusted static app deployment.
 
+The `web/` directory contains the production passkey setup and approval app. Development compatibility pages are under `dev/` and must not be copied to the static host. The default `creds` CLI includes setup, check, encrypt, and decrypt; the local WebTransport echo server is a separate feature-gated development binary.
+
 For example, if the app URL is:
 
     https://keys.example.com/creds/
@@ -108,10 +110,10 @@ The automated and manual checks map to the proposal as follows:
 | No browser persistence or remote assets; request fields use text insertion | Source regression checks and UI test in web/js/main.test.mjs |
 | Key separation from URLs, CLI output, and published files | CLI integration assertions in tests/command_flow.rs. Code review confirms src/main.rs accepts no key argument or key environment setting; handoff keys arrive only in the bounded, assertion-verified message. |
 | One v1 protocol, fixed /key endpoint and algorithms, with no recovery or alternate transport | Source review of src/protocol.rs, src/envelope.rs, src/assertion.rs, and src/handoff.rs. This milestone adds no Rust or JavaScript dependencies. |
-| Browser API and device/network compatibility | Reproduce the Chromium virtual-authenticator checks in browser-compatibility.md. Physical passkey/provider behavior, local-network prompts, deployed DNS, and UDP reachability remain manual release checks. |
+| Production/development separation and browser API compatibility | `scripts/test.sh` checks that production HTML/modules and the default CLI exclude probe hooks, then tests the separate development page and feature-gated echo binary. Follow browser-compatibility.md for Chromium virtual-authenticator probes. Physical passkey/provider behavior, local-network prompts, deployed DNS, and UDP reachability remain manual release checks. |
 
 The automated suffix tests use a public-style approval hostname and a different machine DNS suffix. They check configured suffix validation, the combined destination, and rejection of QR destination/suffix/path overrides. They do not resolve tailnet names or test deployed UDP reachability.
 
 The runner has no physical authenticator or deployment network. The Chromium procedure exercises loopback WebTransport and a virtual CTAP 2.1 authenticator only. Do not treat it as evidence for every browser, authenticator, passkey provider, or deployment network.
 
-See browser-compatibility.md for the recorded Chromium and virtual-authenticator procedures and results. Before release, repeat passkey creation and export, approval, wrong-passkey failure, and repeat decryption on each intended physical device and passkey provider. Also test browser local-network permission prompts and UDP reachability from a separate device on the deployed network. Those checks were not available on the implementation runner.
+See browser-compatibility.md for the development-only Chromium and virtual-authenticator procedures and results. Before release, repeat passkey creation and export, approval, wrong-passkey failure, and repeat decryption on each intended physical device and passkey provider. Also test browser local-network permission prompts and UDP reachability from a separate device on the deployed network. Those checks were not available on the implementation runner.

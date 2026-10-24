@@ -75,9 +75,6 @@ function startApprovalUi({ connectHandoff, createApprovalAssertion = async () =>
       querySelectorAll: () => [
         "#create-passkey",
         "#copy-public-key",
-        "#positive-pin",
-        "#negative-pin",
-        "#test-prf",
         "#approve-request",
         "#cancel-request",
       ].map(element),
@@ -92,9 +89,6 @@ function startApprovalUi({ connectHandoff, createApprovalAssertion = async () =>
     connectHandoff,
     createApprovalAssertion,
     createPasskey: async () => ({}),
-    testPrfApi: async () => ({}),
-    testPinnedEcho: async () => ({}),
-    testMismatchedPin: async () => ({}),
   });
 
   vm.runInContext(source, context);
@@ -164,6 +158,23 @@ test("the static client uses no persistent browser storage or remote assets", ()
   assert.doesNotMatch(html, /<(?:script|link)\b[^>]+https?:\/\//iu);
   assert.doesNotMatch(stylesheet, /@import\s+url\s*\(|url\s*\(\s*["']?https?:/iu);
   assert.doesNotMatch(modules.join("\n"), /from\s+["']https?:\/\//u);
+});
+
+test("production entry points exclude compatibility probes and test-passkey creation", () => {
+  const html = readFileSync(new URL("../index.html", import.meta.url), "utf8");
+  const modules = ["main.mjs", "transport.mjs", "webauthn.mjs"]
+    .map((name) => readFileSync(new URL(name, import.meta.url), "utf8"));
+  const cli = readFileSync(new URL("../../src/main.rs", import.meta.url), "utf8");
+  const production = [html, ...modules, cli].join("\n");
+
+  assert.match(html, /Create passkey and export public key/u);
+  assert.match(modules[2], /export async function createPasskey/u);
+  assert.doesNotMatch(production, /probe-server|probe-tools|test-passkey|test credential|testPrfApi|testPinnedEcho|testMismatchedPin/u);
+
+  const devPage = readFileSync(new URL("../../dev/browser-compatibility/index.html", import.meta.url), "utf8");
+  const devRust = readFileSync(new URL("../../dev/transport_probe.rs", import.meta.url), "utf8");
+  assert.match(devPage, /Create test credential and evaluate PRF/u);
+  assert.match(devRust, /WebTransport probe/u);
 });
 
 test("cancel during connection setup closes the late session without sending a key", async () => {
