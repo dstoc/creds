@@ -285,9 +285,14 @@ impl ApprovalSession {
         self.request["revision"].as_u64().unwrap()
     }
 
+    fn approval_timeout_ms(&self) -> u64 {
+        self.request["approvalTimeoutMs"].as_u64().unwrap()
+    }
+
     fn assert_request(&self, name: &str, revision: u64, operation: &str) {
         assert_eq!(self.request["type"], "request");
         assert_eq!(self.request["version"], 1);
+        assert!((1..=120_000).contains(&self.approval_timeout_ms()));
         assert_eq!(self.request["name"], name);
         assert_eq!(self.revision(), revision);
         assert_eq!(self.request["operation"], operation);
@@ -435,6 +440,14 @@ fn assert_silent_encryption(output: Output, expected_revision: u64) {
         stderr.contains(&format!("revision {expected_revision}")),
         "{stderr}"
     );
+    assert!(
+        stderr.contains("Waiting for a browser connection"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("Approval request established. Waiting up to two minutes"),
+        "{stderr}"
+    );
 }
 
 #[tokio::test]
@@ -457,6 +470,7 @@ async fn encrypt_decrypt_commands_use_authenticated_live_handoffs_and_frozen_sna
     let encrypt_file = RunningCommand::start(&config, "encrypt", "primary", &file_input, None)?;
     let approval = connect_approval(encrypt_file.approve_url()).await?;
     approval.assert_request("primary", 1, "encrypt");
+    assert_eq!(approval.approval_timeout_ms(), 120_000);
     approval.send_key(key_one, &fixture_signer).await?;
     assert_silent_encryption(encrypt_file.finish()?, 1);
 
@@ -603,6 +617,14 @@ async fn simultaneous_sessions_reject_duplicate_and_cross_connection_responses()
     session_b.assert_request("race", 1, "encrypt");
     session_c.assert_request("race", 1, "encrypt");
     session_d.assert_request("race", 1, "encrypt");
+    let approval_times = [
+        session_a.approval_timeout_ms(),
+        session_b.approval_timeout_ms(),
+        session_c.approval_timeout_ms(),
+        session_d.approval_timeout_ms(),
+    ];
+    assert_eq!(approval_times[0], 120_000);
+    assert!(approval_times.windows(2).all(|pair| pair[0] >= pair[1]));
     let challenge_a = session_a.request["challenge"].as_str().unwrap().to_owned();
     let challenge_b = session_b.request["challenge"].as_str().unwrap();
     let challenge_c = session_c.request["challenge"].as_str().unwrap();

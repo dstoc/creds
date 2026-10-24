@@ -72,7 +72,7 @@ creds decrypt NAME OUTPUT
 creds decrypt NAME -
 ~~~
 
-The hyphen reads encryption input from standard input or writes decrypted plaintext to standard output. Named output files are created exclusively and are not overwritten. The CLI prints a temporary approval URL and terminal QR to standard error, then waits up to two minutes. Open the URL on the trusted app origin, check the machine, name, revision, and operation, then approve with passkey user verification. An operation succeeds only after the CLI verifies the assertion and completes its local storage operation.
+The hyphen reads encryption input from standard input or writes decrypted plaintext to standard output. Named output files are created exclusively and are not overwritten. The CLI prints a temporary approval URL and terminal QR to standard error and waits for a browser connection. Each connection has 30 seconds to establish the request. The first established request gets two minutes for passkey user verification; later connections receive only the time that remains. The browser closes the request when its timer expires. If no browser connects, use Ctrl-C to cancel the CLI. An operation succeeds only after the CLI verifies the assertion and completes its local storage operation.
 
 Run creds check after setup. It validates local configuration and storage paths. It does not test passkey possession, browser compatibility, DNS, UDP reachability, file permissions for a future operation, or whether a secret can be decrypted.
 

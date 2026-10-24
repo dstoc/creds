@@ -8,6 +8,7 @@ const REQUEST = Object.freeze({
   revision: 7,
   operation: "encrypt",
   challenge: Uint8Array.from({ length: 32 }, (_, index) => index + 1),
+  approvalTimeoutMs: 120_000,
 });
 
 function createSession(request = REQUEST) {
@@ -42,6 +43,14 @@ function startApprovalUi({ connectHandoff, createApprovalAssertion = async () =>
 }) }) {
   const elements = new Map();
   const historyCalls = [];
+  const timers = new Map();
+  let nextTimerId = 1;
+  const setTimeout = (callback, delay) => {
+    const id = nextTimerId++;
+    timers.set(id, { callback, delay });
+    return id;
+  };
+  const clearTimeout = (id) => { timers.delete(id); };
   const element = (selector) => {
     if (!elements.has(selector)) {
       elements.set(selector, {
@@ -77,6 +86,8 @@ function startApprovalUi({ connectHandoff, createApprovalAssertion = async () =>
     history: { replaceState(...args) { historyCalls.push(args); } },
     AbortController,
     DOMException,
+    setTimeout,
+    clearTimeout,
     parseHandoffFragment: () => Object.freeze({ fullHostname: "workstation.tailnet.example.net" }),
     connectHandoff,
     createApprovalAssertion,
@@ -90,6 +101,12 @@ function startApprovalUi({ connectHandoff, createApprovalAssertion = async () =>
   return {
     element,
     historyCalls,
+    timerDelays: () => [...timers.values()].map(({ delay }) => delay),
+    fireTimers() {
+      const pending = [...timers.values()];
+      timers.clear();
+      for (const { callback } of pending) callback();
+    },
     async click(selector) {
       const target = element(selector);
       const handler = target.handlers.click;
@@ -120,7 +137,8 @@ test("approval stays disabled until the pinned request is displayed", async () =
   assert.equal(ui.element("#request-revision").textContent, "7");
   assert.equal(ui.element("#request-operation").textContent, "encrypt");
   assert.deepEqual(ui.historyCalls, [[null, "", "/"]]);
-  assert.match(ui.element("#result").textContent, /Connected to the pinned CLI/u);
+  assert.match(ui.element("#result").textContent, /approve within 2 minutes/u);
+  assert.deepEqual(ui.timerDelays(), [120_000]);
   assert.equal(ui.element("#approve-request").disabled, false);
 });
 
@@ -172,6 +190,25 @@ test("cancel during connection setup closes the late session without sending a k
   assert.match(ui.element("#result").textContent, /cancelled/u);
 });
 
+test("an established transport that stalls before the approval request closes after 30 seconds", async () => {
+  let connectionSignal;
+  const ui = startApprovalUi({
+    connectHandoff: (_handoff, signal) => {
+      connectionSignal = signal;
+      return new Promise(() => {});
+    },
+  });
+  await settle();
+
+  assert.deepEqual(ui.timerDelays(), [30_000]);
+  ui.fireTimers();
+  await settle();
+
+  assert.equal(connectionSignal.aborted, true);
+  assert.equal(ui.element("#approve-request").disabled, true);
+  assert.match(ui.element("#result").textContent, /Connection setup expired after 30 seconds/u);
+});
+
 test("cancel during the WebAuthn ceremony aborts it and sends no key", async () => {
   const session = createSession();
   let assertionSignal;
@@ -195,6 +232,93 @@ test("cancel during the WebAuthn ceremony aborts it and sends no key", async () 
   assert.equal(session.closed, true);
   assert.equal(session.sent.length, 0);
   assert.match(ui.element("#result").textContent, /cancelled/u);
+});
+
+test("the browser closes an established request when its two-minute approval window expires", async () => {
+  const session = createSession();
+  const ui = startApprovalUi({ connectHandoff: async () => session });
+  await settle();
+
+  assert.deepEqual(ui.timerDelays(), [120_000]);
+  ui.fireTimers();
+
+  assert.equal(session.closed, true);
+  assert.equal(session.sent.length, 0);
+  assert.equal(ui.element("#approve-request").disabled, true);
+  assert.equal(ui.element("#cancel-request").disabled, true);
+  assert.match(ui.element("#result").textContent, /approval window expired/u);
+});
+
+test("approval expiry closes the session and clears the key while transmission is pending", async () => {
+  const session = createSession();
+  const key = new Uint8Array(32).fill(0x5a);
+  let resolveSendStarted;
+  let rejectSend;
+  let transmittedKey;
+  const sendStarted = new Promise((resolve) => { resolveSendStarted = resolve; });
+  session.sendKey = (value) => {
+    transmittedKey = value;
+    resolveSendStarted();
+    return new Promise((_resolve, reject) => { rejectSend = reject; });
+  };
+  const close = session.close.bind(session);
+  session.close = () => {
+    close();
+    rejectSend?.(new Error("transport closed"));
+  };
+  const ui = startApprovalUi({
+    connectHandoff: async () => session,
+    createApprovalAssertion: async () => ({ key, assertion: {} }),
+  });
+  await settle();
+
+  const sending = ui.click("#approve-request");
+  await sendStarted;
+  assert.deepEqual(ui.timerDelays(), [120_000]);
+
+  ui.fireTimers();
+  await sending;
+
+  assert.equal(session.closed, true);
+  assert.equal(transmittedKey, key);
+  assert.equal(key.every((byte) => byte === 0), true);
+  assert.equal(ui.element("#approve-request").disabled, true);
+  assert.equal(ui.element("#cancel-request").disabled, true);
+  assert.match(ui.element("#result").textContent, /approval window expired/u);
+  assert.doesNotMatch(ui.element("#result").textContent, /Approval sent/u);
+});
+
+test("approval expiry aborts a pending WebAuthn ceremony before it can send a key", async () => {
+  const session = createSession();
+  let assertionSignal;
+  const ui = startApprovalUi({
+    connectHandoff: async () => session,
+    createApprovalAssertion: (_request, signal) => new Promise((_resolve, reject) => {
+      assertionSignal = signal;
+      signal.addEventListener("abort", () => reject(new DOMException("expired", "AbortError")), { once: true });
+    }),
+  });
+  await settle();
+
+  const approval = ui.click("#approve-request");
+  await settle();
+  ui.fireTimers();
+  await settle();
+  await approval;
+
+  assert.equal(assertionSignal.aborted, true);
+  assert.equal(session.closed, true);
+  assert.equal(session.sent.length, 0);
+  assert.match(ui.element("#result").textContent, /approval window expired/u);
+});
+
+test("a later connection shows and enforces only the remaining approval time", async () => {
+  const session = createSession({ ...REQUEST, approvalTimeoutMs: 90_000 });
+  const ui = startApprovalUi({ connectHandoff: async () => session });
+  await settle();
+
+  assert.match(ui.element("#result").textContent, /approve within 1 minute 30 seconds/u);
+  assert.deepEqual(ui.timerDelays(), [90_000]);
 });
 
 test("session loss while WebAuthn is pending aborts approval and disables both actions", async () => {

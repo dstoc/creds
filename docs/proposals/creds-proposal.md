@@ -150,7 +150,7 @@ Required fields are `app_url`, `hostname`, `storage_dir`, and `public_key`. Reje
 
 Require an HTTPS app URL without credentials, query or fragment; permit a deployment path. Derive the expected WebAuthn origin from its scheme/host/port and RP ID from its hostname. This avoids independent settings that could disagree. Fix RP ID to the exact app hostname in v1 rather than supporting parent-domain RP IDs.
 
-`listen_addr` optionally selects a bind IP and UDP port. Port zero lets the OS allocate a port, which the CLI advertises in the URL. A fixed port can be configured if network policy requires one. The machine label combined with the web app's configured DNS suffix must resolve to a reachable address on the chosen listener. Do not add a CLI DNS-suffix setting, separate port, timeout, algorithm or per-secret settings. Keep the two-minute operation timeout fixed.
+`listen_addr` optionally selects a bind IP and UDP port. Port zero lets the OS allocate a port, which the CLI advertises in the URL. A fixed port can be configured if network policy requires one. The machine label combined with the web app's configured DNS suffix must resolve to a reachable address on the chosen listener. Do not add a CLI DNS-suffix setting, separate port, configurable timeout, algorithm or per-secret settings. Keep the 30-second connection-setup timeout and two-minute approval window fixed.
 
 `creds setup` creates the config and storage directory and accepts the pasted public key. Default the storage directory to `$XDG_DATA_HOME/creds/secrets`, or `~/.local/share/creds/secrets`. Ask before explicitly replacing existing configuration; ordinary commands never modify the pinned key. Setup does not retain browser state, register an account, or write an encryption key.
 
@@ -164,7 +164,7 @@ For each operation the CLI:
 2. Generates a fresh ephemeral P-256 TLS key and self-signed X.509v3 certificate with a validity period of one day.
 3. Starts an HTTP/3 WebTransport listener on an available UDP port on the intended reachable interface.
 4. Generates a random 32-byte request identifier and displays a URL and QR.
-5. Waits up to two minutes for completion, then exits and releases key material.
+5. Waits for a browser connection or Ctrl-C. Each connection has 30 seconds to complete its handshake and protocol setup. After a valid request is sent to the browser, the CLI allows two minutes for approval, assertion verification and key response. It then exits and releases key material.
 
 Use a URL fragment with ordinary URL parameter encoding, for example:
 
@@ -184,13 +184,15 @@ Use one bidirectional reliable WebTransport stream and three messages, each enco
 
 ```text
 Browser → CLI: {"type":"hello","version":1,"request":"..."}
-CLI → Browser: {"type":"request","version":1,"name":"secret-x","revision":2,"operation":"decrypt","challenge":"<32 random bytes>"}
+CLI → Browser: {"type":"request","version":1,"name":"secret-x","revision":2,"operation":"decrypt","challenge":"<32 random bytes>","approvalTimeoutMs":120000}
 Browser → CLI: {"type":"key","version":1,"key":"<32 bytes>","assertion":{"clientDataJSON":"...","authenticatorData":"...","signature":"..."}}
 ```
 
 An invalid request identifier closes only that connection. For each valid hello, generate a fresh random 32-byte WebAuthn challenge and keep it exclusively in that connection's state. A URL-wide challenge alone is insufficient: an assertion observed on one connection must not authenticate another connection that presents a different encryption key. The URL request identifier replaces the old token; the connection-specific authentication challenge travels in the request message.
 
-Do not reserve the operation for the first unauthenticated connection. Permit a small fixed number of pending connections (for example four), each with its own challenge and a short timeout capped by the overall two-minute deadline. Unauthenticated failures and disconnects close only their connection. Network access can still cause denial of service; preventing that is outside v1.
+Do not reserve the operation for the first unauthenticated connection. Permit at most four pending connections. Each connection has a 30-second deadline that starts when the CLI accepts its WebTransport connection attempt. The deadline covers the transport handshake, first stream, valid hello, and sending the request message. Invalid or stalled setup closes only that connection and does not start the approval window.
+
+After the CLI validates a hello and sends the request message, start one fixed two-minute approval window for the operation. The request message carries the remaining time as `approvalTimeoutMs`; the first request carries 120000 milliseconds. The browser starts its timer when it receives the request. All established sessions share the same CLI deadline. A later connection receives only the remaining time, so it cannot restart or extend the window. The two-minute window covers user approval, the WebAuthn ceremony, assertion verification and the key response. Do not apply the 30-second setup deadline after this transition. On expiry, close the listener and all sessions. A key response that finishes verification at or after the deadline cannot consume the operation. If no browser connects, the CLI waits until Ctrl-C; this wait does not consume the approval window. Network access can still cause denial of service; preventing that is outside v1.
 
 On receiving a key response, validate the assertion before accepting or using any key bytes:
 
@@ -201,13 +203,13 @@ On receiving a key response, validate the assertion before accepting or using an
 
 After successful verification, atomically consume the pending operation and accept that response's key on the same connection. Close all other sessions and the listener. Replays, repeated responses and additional operations fail. No persistent signature-counter tracking is needed; connection challenges provide replay protection. No acknowledgment or automatic reconnect is required: success is reported by the CLI after the local operation completes.
 
-The browser displays the full hostname, exact logical name, revision, and operation from the frozen request. Only an explicit **Approve and verify** click starts WebAuthn. Use the challenge in that request for WebAuthn. Keep that exact request in memory while the ceremony runs; do not accept edits or replacement messages. On completion, derive and send the key and assertion only to the same live session. Never accept a replacement challenge or forward an assertion between sessions. **Cancel** closes the session without deriving or sending a key.
+The browser displays the full hostname, exact logical name, revision, and operation from the frozen request. It also shows the time that remains in the shared approval window. Only an explicit **Approve and verify** click starts WebAuthn. Use the challenge in that request for WebAuthn. Keep that exact request in memory while the ceremony runs; do not accept edits or replacement messages. On completion, derive and send the key and assertion only to the same live session before the approval deadline. Never accept a replacement challenge or forward an assertion between sessions. **Cancel** closes the session without deriving or sending a key.
 
 The name need not be duplicated in the QR: the pinned session supplies an immutable request that the browser displays before approval. This avoids a second representation and comparison rule.
 
 ### Failure and memory handling
 
-Missing PRF output, declined verification, unsupported APIs, certificate mismatch, failed assertion verification, missing setup, network failure, permission denial, expiry, or malformed data fails closed. Do not downgrade to an unpinned connection, another cipher, cached key, or another passkey automatically.
+Missing PRF output, declined verification, unsupported APIs, certificate mismatch, failed assertion verification, missing setup, network failure, permission denial, setup timeout, approval expiry, cancellation, or malformed data fails closed. Do not downgrade to an unpinned connection, another cipher, cached key, or another passkey automatically.
 
 A decryption tag failure reports that the key does not match or the file is damaged; it cannot reliably distinguish these cases. Preserve the existing encrypted file until the atomic replacement commit point. A failed or cancelled approval never consumes a revision or changes the current file.
 
@@ -244,7 +246,7 @@ Implement in this order:
 - Certificate mismatch and unexpected Origin stop the browser session. Wrong request identifiers and invalid assertions never cause the CLI to use a supplied key.
 - Reject wrong signing key, challenge, signed origin, RP ID hash, missing UP/UV, malformed assertion data and altered signatures. Verify signature fixtures using original client-data bytes.
 - With a leaked URL, an attacker connection supplying its own key cannot encrypt a file or consume the operation. An assertion captured from connection A fails on connection B. Failed unauthenticated connections do not reserve the operation; the first valid response wins atomically. Repeated responses cannot trigger another operation.
-- Cancellation and disconnection close the affected connection; overall expiry terminates the command cleanly. The page never sends a key after the approved session has been replaced or closed.
+- Setup stalls close only the affected connection at 30 seconds and do not start the approval window. A valid request starts one two-minute deadline shared by all sessions. Slow user approval can continue beyond the setup deadline; approval at or after expiry, CLI cancellation, and replay cannot use a key or consume a second operation. The page closes its session at expiry and never sends a key after the approved session has been replaced or closed.
 - Named-file and stdin encryption produce decryptable named storage entries. Named-file and stdout decryption preserve exact bytes, including empty and binary input.
 - First encryption creates revision 1; replacement produces revision 2 in the same JSON path, and decrypt returns the new plaintext. Only the current envelope and a stable lock sidecar remain after success.
 - Cancellation, invalid assertion and write failures before publication preserve the previous envelope byte-for-byte and do not consume a revision. Test the post-rename durability-error report separately.
