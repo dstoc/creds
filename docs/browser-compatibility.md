@@ -124,7 +124,7 @@ Use five terminals from the repository root. Keep each long-running process open
 
 7. On the same page, create and export a setup key. Use the current UID from a fresh snapshot and click **Create passkey and export public key**. The browser creates a new discoverable passkey and requests user verification. The page reports success after PRF evaluation and displays the unpadded base64url DER SPKI key in a read-only field. Use **Copy public key** or select the field and copy it into `creds setup`.
 
-The Python server adds CSP, `frame-ancestors 'none'`, `nosniff`, and referrer-policy headers. `frame-ancestors` must be sent as an HTTP response header; the HTML meta policy does not replace it. Use the local server's response headers as the deployment header baseline. Replace the `keys.example` CSP suffix with the deployed app hostname. The server serves only static files from `web/` and listens on loopback port 8000. For a local HTTPS page, pass `--tls-cert` and `--tls-key` to `scripts/serve.py`.
+The Python server adds CSP, `frame-ancestors 'none'`, `nosniff`, and referrer-policy headers. Automated tests check these headers, the JavaScript module MIME type, and 404 behavior for a missing module. `frame-ancestors` must be sent as an HTTP response header; the HTML meta policy does not replace it. Use the [deployment guide](deployment.md) for production response headers and DNS suffix setup. The server serves only static files from `web/` and listens on loopback port 8000. For a local HTTPS page, pass `--tls-cert` and `--tls-key` to `scripts/serve.py`.
 
 ## Limits and later checks
 

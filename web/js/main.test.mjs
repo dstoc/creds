@@ -10,11 +10,11 @@ const REQUEST = Object.freeze({
   challenge: Uint8Array.from({ length: 32 }, (_, index) => index + 1),
 });
 
-function createSession() {
+function createSession(request = REQUEST) {
   let resolveFailure;
   let active = true;
   const session = {
-    request: REQUEST,
+    request,
     sent: [],
     closed: false,
     failed: new Promise((resolve) => { resolveFailure = resolve; }),
@@ -49,6 +49,7 @@ function startApprovalUi({ connectHandoff, createApprovalAssertion = async () =>
         hidden: false,
         value: "",
         textContent: "",
+        innerHTML: "",
         handlers: {},
         addEventListener(type, handler) { this.handlers[type] = handler; },
         focus() {},
@@ -121,6 +122,30 @@ test("approval stays disabled until the pinned request is displayed", async () =
   assert.deepEqual(ui.historyCalls, [[null, "", "/"]]);
   assert.match(ui.element("#result").textContent, /Connected to the pinned CLI/u);
   assert.equal(ui.element("#approve-request").disabled, false);
+});
+
+test("request fields are inserted as text, including markup-shaped names", async () => {
+  const name = '<img src=x onerror="alert(1)">';
+  const session = createSession({ ...REQUEST, name });
+  const ui = startApprovalUi({ connectHandoff: async () => session });
+  await settle();
+
+  assert.equal(ui.element("#request-name").textContent, name);
+  assert.equal(ui.element("#request-name").innerHTML, "");
+});
+
+test("the static client uses no persistent browser storage or remote assets", () => {
+  const html = readFileSync(new URL("../index.html", import.meta.url), "utf8");
+  const stylesheet = readFileSync(new URL("../style.css", import.meta.url), "utf8");
+  const modules = ["encoding.mjs", "envelope.mjs", "main.mjs", "transport.mjs", "webauthn.mjs"]
+    .map((name) => readFileSync(new URL(name, import.meta.url), "utf8"));
+  const sources = [html, stylesheet, ...modules].join("\n");
+
+  assert.doesNotMatch(sources, /\b(?:localStorage|sessionStorage|indexedDB|serviceWorker)\b/u);
+  assert.doesNotMatch(sources, /document\s*\.\s*cookie/u);
+  assert.doesNotMatch(html, /<(?:script|link)\b[^>]+https?:\/\//iu);
+  assert.doesNotMatch(stylesheet, /@import\s+url\s*\(|url\s*\(\s*["']?https?:/iu);
+  assert.doesNotMatch(modules.join("\n"), /from\s+["']https?:\/\//u);
 });
 
 test("cancel during connection setup closes the late session without sending a key", async () => {

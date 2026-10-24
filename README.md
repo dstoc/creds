@@ -6,7 +6,7 @@ The design and security contracts are in [the proposal](docs/proposals/creds-pro
 
 Open the static web client at the trusted deployment origin and copy its exported key into `creds setup`. Then run `creds check` to validate the local setup. Use `creds encrypt NAME INPUT` to encrypt a file, or `creds encrypt NAME -` to read stdin. Use `creds decrypt NAME OUTPUT` to decrypt to a new file, or `creds decrypt NAME -` to write plaintext to stdout. Each operation prints a temporary approval URL and terminal QR to stderr and waits up to two minutes for a passkey assertion from the configured app origin. Use `creds --config PATH setup`, `check`, `encrypt`, or `decrypt` for an explicit configuration file.
 
-The static host must serve the page over HTTPS and send the security headers described in [the browser compatibility notes](docs/browser-compatibility.md). Set the `creds-dns-suffix` meta value in `web/index.html` to the deployed app hostname, and update the `connect-src` policy in `web/index.html` and the local server CSP rule to match. The browser rejects a handoff if the configured suffix differs from the page hostname. A real deployment must also make `<hostname>.<app-hostname>` reachable over UDP for WebTransport.
+The static host must serve the page over HTTPS, use restrictive response headers, and serve JavaScript modules with a JavaScript MIME type. Follow the [deployment and operator guide](docs/deployment.md) to set the exact app origin, RP ID, DNS suffix, CSP, CLI configuration, storage permissions, and UDP route.
 
 ## Test
 
@@ -18,4 +18,4 @@ Run the same command used by GitHub Actions:
 
 ## Browser compatibility probes
 
-See [browser compatibility notes](docs/browser-compatibility.md) for local WebTransport certificate-pin checks, passkey creation/export and PRF checks, observed versions, and runner limitations. The `creds probe-server` command is a loopback-only echo fixture for that experiment. It is not a production service or an alternate transport.
+See [browser compatibility notes](docs/browser-compatibility.md) for local WebTransport certificate-pin checks, passkey creation/export and PRF checks, observed versions, reproducible procedures, and runner limitations. The `creds probe-server` command is a loopback-only echo fixture for that experiment. It is not a production service or an alternate transport.
