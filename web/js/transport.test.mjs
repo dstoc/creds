@@ -92,6 +92,7 @@ test("handoff fragment validates the version, DNS label, port, pin, and request"
   const handoff = parseHandoffFragment(
     `#v=1&host=workstation&port=8443&cert=${pinText}&request=${requestText}`,
     { protocol: "https:", hostname: "keys.example" },
+    "keys.example",
   );
   assert.equal(handoff.endpoint, "https://workstation.keys.example:8443/key");
   assert.equal(handoff.fullHostname, "workstation.keys.example");
@@ -105,12 +106,27 @@ test("handoff fragment validates the version, DNS label, port, pin, and request"
     `#v=1&host=workstation&port=8443&cert=${pinText}&cert=${pinText}&request=${requestText}`,
     `#v=1&host=workstation&port=8443&cert=${pinText}&request=${requestText}&url=https://evil.example`,
   ]) {
-    assert.throws(() => parseHandoffFragment(fragment, { protocol: "https:", hostname: "keys.example" }));
+    assert.throws(() => parseHandoffFragment(
+      fragment,
+      { protocol: "https:", hostname: "keys.example" },
+      "keys.example",
+    ));
   }
   assert.throws(() => parseHandoffFragment(
     `#v=1&host=workstation&port=8443&cert=${pinText}&request=${requestText}`,
     { protocol: "http:", hostname: "localhost" },
+    "localhost",
   ), /HTTPS/u);
+  assert.throws(() => parseHandoffFragment(
+    `#v=1&host=workstation&port=8443&cert=${pinText}&request=${requestText}`,
+    { protocol: "https:", hostname: "keys.example" },
+    "other.example",
+  ), /configured DNS suffix/u);
+  assert.throws(() => parseHandoffFragment(
+    `#v=1&host=workstation&port=8443&cert=${pinText}&request=${requestText}`,
+    { protocol: "https:", hostname: "127.0.0.1" },
+    "127.0.0.1",
+  ), /configured DNS suffix/u);
 });
 
 test("request parser rejects duplicate, unknown, cross-purpose, and malformed fields", () => {
@@ -174,6 +190,7 @@ test("approval opens one stream with the exact certificate pin and handles split
     const handoff = parseHandoffFragment(
       `#v=1&host=workstation&port=8443&cert=${pinText}&request=${requestText}`,
       { protocol: "https:", hostname: "keys.example" },
+      "keys.example",
     );
     const session = await connectHandoff(handoff);
     assert.equal(session.request.name, "secret-x");

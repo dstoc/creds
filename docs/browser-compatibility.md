@@ -14,6 +14,12 @@ Run date: 2026-10-24.
 | Node.js | 24.17.0 |
 | Python | 3.13.5 |
 
+## Automated browser coverage
+
+`./scripts/test.sh` runs the browser-module tests under Node.js. `main.test.mjs` uses a lightweight fake DOM and mocked handoff sessions to cover request display, cancel during connection and WebAuthn, session loss, and the one-approval send path. `transport.test.mjs` uses a mocked WebTransport implementation for framing, pin configuration, extra data, and failure handling. `webauthn.test.mjs` supplies mocked WebAuthn responses for PRF and assertion construction. These tests check application control flow; they do not stand in for a browser or authenticator.
+
+The Chromium experiments below exercise WebTransport, WebAuthn, PRF, and public-key export through Chromium's real APIs with a CDP-controlled virtual CTAP 2.1 authenticator. They remain loopback tests with a virtual authenticator. Physical passkeys, provider-specific PRF behavior, cross-device use, deployment DNS, and deployed UDP reachability remain manual compatibility checks.
+
 ### WebTransport and certificate hash
 
 Chromium connected to the Rust `wtransport` listener with the printed SHA-256 certificate hash. It opened a bidirectional stream, sent the fixed probe message, and received the exact echo. This exercised Chromium's WebTransport API and a real local HTTP/3/WebTransport session. The listener does not implement the creds wire protocol.

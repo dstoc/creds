@@ -105,7 +105,8 @@ async function startApprovalFlow() {
 
   let handoff;
   try {
-    handoff = parseHandoffFragment(fragment);
+    const configuredDnsSuffix = document.querySelector('meta[name="creds-dns-suffix"]').content;
+    handoff = parseHandoffFragment(fragment, location, configuredDnsSuffix);
   } catch (error) {
     approveButton.disabled = true;
     cancelButton.disabled = true;
@@ -154,10 +155,17 @@ approveButton.addEventListener("click", async () => {
   let key;
   try {
     const approved = await createApprovalAssertion(approvalSession.request, approvalController.signal);
+    if (approvalController.signal.aborted) {
+      throw new DOMException("Approval was cancelled.", "AbortError");
+    }
     key = approved.key;
     if (!approvalSession.isActive()) {
       throw approvalSession.failure() ?? new Error("The CLI approval session is closed.");
     }
+    // Cancellation is available through the WebAuthn ceremony. Once the
+    // approved response starts going onto the stream, prevent a late click
+    // from appearing to cancel an operation that may already be received.
+    cancelButton.disabled = true;
     await approvalSession.sendKey(key, approved.assertion);
     show("Approval sent. Check the CLI for the operation result.");
     cancelButton.disabled = true;

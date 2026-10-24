@@ -10,8 +10,18 @@ function oneParameter(params, name) {
   return values[0];
 }
 
-export function parseHandoffFragment(fragment, pageLocation = globalThis.location) {
+export function parseHandoffFragment(fragment, pageLocation = globalThis.location, configuredDnsSuffix) {
   if (pageLocation?.protocol !== "https:") throw new TypeError("The creds approval page must use HTTPS.");
+  if (
+    typeof configuredDnsSuffix !== "string" ||
+    configuredDnsSuffix.length > 253 ||
+    configuredDnsSuffix !== configuredDnsSuffix.toLowerCase() ||
+    !configuredDnsSuffix.split(".").every((label) => /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/u.test(label)) ||
+    /^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$/u.test(configuredDnsSuffix) ||
+    pageLocation.hostname !== configuredDnsSuffix
+  ) {
+    throw new TypeError("The approval page hostname must match its configured DNS suffix.");
+  }
   const params = new URLSearchParams(fragment.startsWith("#") ? fragment.slice(1) : fragment);
   const allowed = new Set(["v", "host", "port", "cert", "request"]);
   for (const name of params.keys()) {
@@ -34,19 +44,15 @@ export function parseHandoffFragment(fragment, pageLocation = globalThis.locatio
   const requestBytes = decodeBase64Url(requestId);
   if (certificatePin.byteLength !== 32) throw new TypeError("The SHA-256 certificate hash must be 32 bytes.");
   if (requestBytes.byteLength !== 32) throw new TypeError("The request identifier must be 32 bytes.");
-  if (!pageLocation.hostname || pageLocation.hostname.includes(":")) {
-    throw new TypeError("The approval page must use a DNS hostname.");
-  }
-
   return Object.freeze({
     host,
-    fullHostname: `${host}.${pageLocation.hostname}`,
+    fullHostname: `${host}.${configuredDnsSuffix}`,
     port,
     certificateHash,
     certificatePin,
     requestId,
     requestBytes,
-    endpoint: `https://${host}.${pageLocation.hostname}:${port}/key`,
+    endpoint: `https://${host}.${configuredDnsSuffix}:${port}/key`,
   });
 }
 
