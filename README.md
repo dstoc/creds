@@ -1,8 +1,10 @@
 # creds
 
-`creds` is a Rust CLI and static web client for browser-approved credential encryption. The repository starts with one Rust executable and plain HTML, CSS, and native JavaScript modules. It has no frontend framework, bundler, transpiler, persistent application backend, or JavaScript package dependencies.
+`creds` is a Rust CLI and library with a static web client for browser-approved credential encryption. The web client uses plain HTML, CSS, and native JavaScript modules. It has no frontend framework, bundler, transpiler, persistent application backend, or JavaScript package dependencies.
 
-The design and security contracts are in [the proposal](docs/proposals/creds-proposal.md). This initial milestone adds the crate skeleton and local browser compatibility probes. It does not yet implement setup, assertion verification, credential encryption, or the production approval flow.
+The design and security contracts are in [the proposal](docs/proposals/creds-proposal.md). The CLI supports interactive local setup and read-only setup checks. The browser can create an ES256 passkey, confirm PRF support, and export its public key. The Rust library verifies bounded WebAuthn assertions against the locally pinned key. Secret encryption and the production approval flow remain future work.
+
+Open the static web client at the trusted deployment origin and copy its exported key into `creds setup`. Then run `creds check` to validate the local setup. Use `creds --config PATH setup` or `creds --config PATH check` for an explicit configuration file.
 
 ## Test
 
@@ -14,4 +16,4 @@ Run the same command used by GitHub Actions:
 
 ## Browser compatibility probes
 
-See [browser compatibility notes](docs/browser-compatibility.md) for local WebTransport certificate-pin checks, WebAuthn PRF checks, observed versions, and runner limitations. The `creds probe-server` command is a loopback-only echo fixture for that experiment. It is not a production service or an alternate transport.
+See [browser compatibility notes](docs/browser-compatibility.md) for local WebTransport certificate-pin checks, passkey creation/export and PRF checks, observed versions, and runner limitations. The `creds probe-server` command is a loopback-only echo fixture for that experiment. It is not a production service or an alternate transport.

@@ -30,6 +30,14 @@ This used the real Chromium WebAuthn and PRF APIs with a CDP-controlled virtual 
 
 The PRF input in this probe is a local test string. This check does not verify discoverable credential selection without `allowCredentials`, the proposal's production key derivation, assertion verification, or byte-level vectors.
 
+### Passkey creation and public-key export
+
+Run date: 2026-10-24. Chromium 156 created a discoverable ES256 credential through the **Create passkey** action with required user verification, no attestation, and the PRF extension. The page confirmed that PRF returned 32 bytes. `getPublicKeyAlgorithm()` returned `-7`, and `getPublicKey()` returned DER SubjectPublicKeyInfo bytes that the page displayed as unpadded base64url. The exported key was accepted by `creds setup`, and `creds check` reported its SHA-256 fingerprint.
+
+This used the real Chromium WebAuthn APIs with a temporary CDP-controlled CTAP 2.1 virtual authenticator configured for resident keys, user verification, automatic presence, and PRF. This does not establish physical authenticator, passkey-provider, or cross-device compatibility.
+
+The installed `chrome-devtools` 1.12.0 CLI returned after `start`, and `status` reported no running daemon in this runner. The page action was exercised through a direct CDP WebSocket connection instead. The runner had no physical authenticator or deployed network to test.
+
 ## Reproduce the probes
 
 Use five terminals from the repository root. Keep each long-running process open during the experiment.
@@ -100,10 +108,12 @@ Use five terminals from the repository root. Keep each long-running process open
 
    The expected result includes `registrationPrfEnabled: true`, `resultLengthBytes: 32`, and `repeatedResultMatched: true`.
 
+7. On the same page, create and export a setup key. Use the current UID from a fresh snapshot and click **Create passkey and export public key**. The browser creates a new discoverable passkey and requests user verification. The page reports success after PRF evaluation and displays the unpadded base64url DER SPKI key in a read-only field. Use **Copy public key** or select the field and copy it into `creds setup`.
+
 The Python server adds CSP, `frame-ancestors 'none'`, `nosniff`, and referrer-policy headers. `frame-ancestors` must be sent as an HTTP response header; the HTML meta policy does not replace it. Use the local server's response headers as the deployment header baseline. The server serves only static files from `web/` and listens on loopback port 8000.
 
 ## Limits and later checks
 
 This runner has no real user device, physical authenticator, passkey-provider account, or deployment UDP network. These results establish only the local Chromium behavior listed above.
 
-Before release, manually check passkey creation and repeated PRF evaluation with each intended browser and authenticator combination. Also check local-network permission prompts and UDP reachability from a separate device to the deployed HTTPS origin. Do not infer device or network support from the virtual authenticator or loopback transport tests.
+Before release, manually check passkey creation, public-key export, and repeated PRF evaluation with each intended browser and authenticator combination. Also check local-network permission prompts and UDP reachability from a separate device to the deployed HTTPS origin. Do not infer device or network support from the virtual authenticator or loopback transport tests.
