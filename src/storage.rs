@@ -146,6 +146,14 @@ impl SecretWriter {
     }
 }
 
+impl Drop for SecretWriter {
+    fn drop(&mut self) {
+        // Release the sidecar lock as soon as the writer leaves scope. The OS
+        // still releases it if the process exits before this runs.
+        let _ = self._lock.unlock();
+    }
+}
+
 /// A bounded, validated in-memory snapshot. Later replacements do not change it.
 pub struct SecretSnapshot {
     envelope: Envelope,
@@ -407,7 +415,9 @@ mod tests {
         ));
         assert!(SecretWriter::begin(dir.path(), "two").is_ok());
         drop(first);
-        assert!(SecretWriter::begin(dir.path(), "one").is_ok());
+        if let Err(error) = SecretWriter::begin(dir.path(), "one") {
+            panic!("same-name lock was not released when the writer dropped: {error:?}");
+        }
     }
 
     #[test]
