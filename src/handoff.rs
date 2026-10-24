@@ -249,6 +249,7 @@ struct SessionState {
     rp_id: String,
     public_key: p256::ecdsa::VerifyingKey,
     operation_window: Arc<OperationWindow>,
+    phase_changed: watch::Receiver<OperationPhase>,
     request_setup_lock: tokio::sync::Mutex<()>,
     active_challenges: Arc<Mutex<HashSet<[u8; 32]>>>,
     key_sender: mpsc::Sender<Zeroizing<[u8; 32]>>,
@@ -327,6 +328,7 @@ pub async fn receive_key(
         rp_id: config.rp_id.clone(),
         public_key: config.public_key,
         operation_window: Arc::clone(&operation_window),
+        phase_changed: phase_changed.clone(),
         request_setup_lock: tokio::sync::Mutex::new(()),
         active_challenges: Arc::new(Mutex::new(HashSet::new())),
         key_sender,
@@ -402,62 +404,63 @@ async fn handle_session(
     state: Arc<SessionState>,
 ) -> Result<()> {
     let connection_deadline = Instant::now() + CONNECTION_TIMEOUT;
-    let session_request = timeout_at(connection_deadline, incoming)
-        .await
-        .map_err(|_| connection_setup_timeout())??;
-    if !is_allowed_session(
-        session_request.origin(),
-        session_request.path(),
-        &state.expected_origin,
-    ) {
-        session_request.forbidden().await;
-        return Err(io::Error::new(
-            io::ErrorKind::PermissionDenied,
-            "WebTransport session Origin or path was rejected",
-        )
-        .into());
-    }
+    let setup_state = Arc::clone(&state);
+    let setup = async move {
+        let session_request = timeout_at(connection_deadline, incoming)
+            .await
+            .map_err(|_| connection_setup_timeout())??;
+        if !is_allowed_session(
+            session_request.origin(),
+            session_request.path(),
+            &setup_state.expected_origin,
+        ) {
+            session_request.forbidden().await;
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "WebTransport session Origin or path was rejected",
+            )
+            .into());
+        }
 
-    let connection = match timeout_at(connection_deadline, session_request.accept()).await {
-        Ok(result) => result?,
-        Err(_) => return Err(connection_setup_timeout()),
+        let connection = match timeout_at(connection_deadline, session_request.accept()).await {
+            Ok(result) => result?,
+            Err(_) => return Err(connection_setup_timeout()),
+        };
+        let (established, approval_deadline) = match timeout_at(
+            connection_deadline,
+            establish_approval_request(&connection, &setup_state),
+        )
+        .await
+        {
+            Ok(Ok(established)) => established,
+            Ok(Err(error)) => {
+                connection.close(VarInt::from_u32(1), b"invalid handoff protocol");
+                return Err(error);
+            }
+            Err(_) => {
+                connection.close(VarInt::from_u32(2), b"connection setup timed out");
+                return Err(connection_setup_timeout());
+            }
+        };
+        Ok((connection, established, approval_deadline))
     };
-    let result = timeout_at(
+
+    run_session(
         connection_deadline,
-        establish_approval_request(&connection, &state),
-    )
-    .await;
-    let (mut receive, challenge, _challenge_guard, approval_deadline) = match result {
-        Ok(Ok(established)) => established,
-        Ok(Err(error)) => {
-            connection.close(VarInt::from_u32(1), b"invalid handoff protocol");
-            return Err(error);
-        }
-        Err(_) => {
-            connection.close(VarInt::from_u32(2), b"connection setup timed out");
-            return Err(connection_setup_timeout());
-        }
-    };
-
-    let stream_rejection = reject_additional_streams(connection.clone());
-    let verified_response = async {
-        timeout_at(
-            approval_deadline,
-            read_and_verify_key(&mut receive, challenge, &state),
-        )
-        .await
-        .map_err(|_| timed_out())?
-    };
-    match arbitrate_and_consume(
-        stream_rejection,
-        verified_response,
+        setup,
+        |connection, (mut receive, challenge, challenge_guard), _approval_deadline| {
+            let stream_rejection = reject_additional_streams(connection);
+            let state = Arc::clone(&state);
+            let verified_response = async move {
+                let _challenge_guard = challenge_guard;
+                read_and_verify_key(&mut receive, challenge, &state).await
+            };
+            (stream_rejection, verified_response)
+        },
         &state.operation_window,
         &state.key_sender,
-    )
-    .await
-    {
-        Ok(()) => Ok(()),
-        Err(error) => {
+        state.phase_changed.clone(),
+        |connection, error| {
             let code = if error
                 .downcast_ref::<io::Error>()
                 .is_some_and(|error| error.kind() == io::ErrorKind::TimedOut)
@@ -467,9 +470,9 @@ async fn handle_session(
                 1
             };
             connection.close(VarInt::from_u32(code), b"approval session closed");
-            Err(error)
-        }
-    }
+        },
+    )
+    .await
 }
 
 fn connection_setup_timeout() -> BoxError {
@@ -484,9 +487,7 @@ async fn establish_approval_request(
     connection: &wtransport::Connection,
     state: &Arc<SessionState>,
 ) -> Result<(
-    wtransport::RecvStream,
-    [u8; 32],
-    ActiveChallengeGuard,
+    (wtransport::RecvStream, [u8; 32], ActiveChallengeGuard),
     Instant,
 )> {
     let (mut send, mut receive) = accept_one_bidirectional_stream(connection).await?;
@@ -514,7 +515,7 @@ async fn establish_approval_request(
         .await
         .map_err(|error| io::Error::other(error.to_string()))?;
     let approval_deadline = state.operation_window.begin_approval()?;
-    Ok((receive, challenge, challenge_guard, approval_deadline))
+    Ok(((receive, challenge, challenge_guard), approval_deadline))
 }
 
 async fn read_and_verify_key(
@@ -553,14 +554,80 @@ async fn reject_additional_streams(connection: wtransport::Connection) -> io::Er
     }
 }
 
+async fn run_session<C, T, SetupFuture, Approval, RejectionFuture, ResponseFuture, Close>(
+    setup_deadline: Instant,
+    setup: SetupFuture,
+    approval: Approval,
+    operation_window: &OperationWindow,
+    key_sender: &mpsc::Sender<Zeroizing<[u8; 32]>>,
+    phase_changed: watch::Receiver<OperationPhase>,
+    close: Close,
+) -> Result<()>
+where
+    C: Clone,
+    SetupFuture: Future<Output = Result<(C, T, Instant)>>,
+    Approval: FnOnce(C, T, Instant) -> (RejectionFuture, ResponseFuture),
+    RejectionFuture: Future<Output = io::Error>,
+    ResponseFuture: Future<Output = Result<Zeroizing<[u8; 32]>>>,
+    Close: FnOnce(C, &BoxError),
+{
+    let (connection, session, approval_deadline) = timeout_at(setup_deadline, setup)
+        .await
+        .map_err(|_| connection_setup_timeout())??;
+    let (stream_rejection, verified_response) =
+        approval(connection.clone(), session, approval_deadline);
+    let result = arbitrate_and_consume(
+        approval_deadline,
+        stream_rejection,
+        verified_response,
+        operation_window,
+        key_sender,
+        phase_changed,
+    )
+    .await;
+    if let Err(error) = result {
+        close(connection, &error);
+        return Err(error);
+    }
+    Ok(())
+}
+
 async fn arbitrate_and_consume(
+    approval_deadline: Instant,
     stream_rejection: impl Future<Output = io::Error>,
     verified_response: impl Future<Output = Result<Zeroizing<[u8; 32]>>>,
     operation_window: &OperationWindow,
     key_sender: &mpsc::Sender<Zeroizing<[u8; 32]>>,
+    mut phase_changed: watch::Receiver<OperationPhase>,
 ) -> Result<()> {
+    match *phase_changed.borrow_and_update() {
+        OperationPhase::Approval { deadline } if deadline == approval_deadline => {}
+        OperationPhase::Approval { .. } | OperationPhase::Setup => {
+            return Err(io::Error::other("approval request was not established").into());
+        }
+        OperationPhase::Consumed => return Err(already_consumed()),
+        OperationPhase::Expired => return Err(timed_out()),
+        OperationPhase::Cancelled => return Err(cancelled()),
+    }
+
     tokio::select! {
         biased;
+        _ = sleep_until(approval_deadline) => {
+            operation_window.expire(approval_deadline);
+            Err(timed_out())
+        }
+        changed = phase_changed.changed() => {
+            if changed.is_err() {
+                return Err(io::Error::other("approval state stopped unexpectedly").into());
+            }
+            match *phase_changed.borrow_and_update() {
+                OperationPhase::Approval { .. } => Err(io::Error::other("approval deadline changed unexpectedly").into()),
+                OperationPhase::Setup => Err(io::Error::other("approval request was not established").into()),
+                OperationPhase::Consumed => Err(already_consumed()),
+                OperationPhase::Expired => Err(timed_out()),
+                OperationPhase::Cancelled => Err(cancelled()),
+            }
+        }
         error = stream_rejection => Err(error.into()),
         response = verified_response => {
             let key = response?;
@@ -796,8 +863,27 @@ fn random_bytes<const N: usize>() -> Result<[u8; N]> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Barrier;
+    use std::sync::{
+        Barrier,
+        atomic::{AtomicBool, Ordering},
+    };
     use url::form_urlencoded;
+
+    #[derive(Clone)]
+    struct TestConnection(Arc<AtomicBool>);
+
+    fn test_connection() -> (TestConnection, Arc<AtomicBool>) {
+        let closed = Arc::new(AtomicBool::new(false));
+        (TestConnection(Arc::clone(&closed)), closed)
+    }
+
+    async fn establish_test_session(
+        window: &OperationWindow,
+        connection: TestConnection,
+    ) -> Result<(TestConnection, (), Instant)> {
+        let approval_deadline = window.begin_approval()?;
+        Ok((connection, (), approval_deadline))
+    }
 
     #[test]
     fn session_requires_exact_configured_origin_and_key_path() {
@@ -913,16 +999,23 @@ mod tests {
 
     #[tokio::test]
     async fn additional_stream_rejection_wins_before_consuming_a_verified_response() {
-        let (window, _) = OperationWindow::new();
-        window.begin_approval().unwrap();
+        let (window, phase_changed) = OperationWindow::new();
+        let approval_deadline = window.begin_approval().unwrap();
         let (sender, mut receiver) = mpsc::channel(1);
         let stream_rejection =
             async { io::Error::new(io::ErrorKind::InvalidData, "additional stream rejected") };
         // The valid response is already verified and ready at the session decision point.
         let verified_response = async { Ok(Zeroizing::new([0x6d; 32])) };
 
-        let result =
-            arbitrate_and_consume(stream_rejection, verified_response, &window, &sender).await;
+        let result = arbitrate_and_consume(
+            approval_deadline,
+            stream_rejection,
+            verified_response,
+            &window,
+            &sender,
+            phase_changed,
+        )
+        .await;
 
         assert!(result.is_err());
         assert!(matches!(window.phase(), OperationPhase::Approval { .. }));
@@ -993,15 +1086,39 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn approval_gets_a_full_window_after_slow_setup() {
-        let (window, _) = OperationWindow::new();
+    async fn production_session_allows_approval_after_the_setup_deadline() {
+        let (window, phase_changed) = OperationWindow::new();
+        let window = Arc::new(window);
         let setup_deadline = Instant::now() + CONNECTION_TIMEOUT;
-        tokio::time::advance(CONNECTION_TIMEOUT).await;
+        let (started_sender, started_receiver) = tokio::sync::oneshot::channel();
+        let (connection, _) = test_connection();
+        let (key_sender, mut key_receiver) = mpsc::channel(1);
+        let task_window = Arc::clone(&window);
+        let setup_window = Arc::clone(&task_window);
+        let task = tokio::spawn(async move {
+            run_session(
+                setup_deadline,
+                async move { establish_test_session(&setup_window, connection).await },
+                move |_, (), _| {
+                    (std::future::pending::<io::Error>(), async move {
+                        started_sender.send(()).unwrap();
+                        tokio::time::sleep(CONNECTION_TIMEOUT + Duration::from_secs(1)).await;
+                        Ok(Zeroizing::new([0x6d; 32]))
+                    })
+                },
+                &task_window,
+                &key_sender,
+                phase_changed,
+                |_, _| {},
+            )
+            .await
+        });
 
-        let approval_deadline = window.begin_approval().unwrap();
-        assert_eq!(approval_deadline, setup_deadline + APPROVAL_TIMEOUT);
-        tokio::time::advance(APPROVAL_TIMEOUT - Duration::from_millis(1)).await;
-        assert!(window.try_consume().is_ok());
+        started_receiver.await.unwrap();
+        tokio::time::advance(CONNECTION_TIMEOUT + Duration::from_secs(1)).await;
+
+        task.await.unwrap().unwrap();
+        assert_eq!(*key_receiver.try_recv().unwrap(), [0x6d; 32]);
         assert_eq!(window.phase(), OperationPhase::Consumed);
     }
 
@@ -1018,10 +1135,69 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn stalled_setup_expires_after_its_short_deadline() {
-        let deadline = Instant::now() + CONNECTION_TIMEOUT;
-        let result = timeout_at(deadline, std::future::pending::<()>()).await;
-        assert!(result.is_err());
+    async fn production_session_bounds_stalled_setup_and_releases_its_pending_slot() {
+        let (window, phase_changed) = OperationWindow::new();
+        let window = Arc::new(window);
+        let pending = Arc::new(Semaphore::new(1));
+        let permit = Arc::clone(&pending).try_acquire_owned().unwrap();
+        let (started_sender, started_receiver) = tokio::sync::oneshot::channel();
+        let setup_deadline = Instant::now() + CONNECTION_TIMEOUT;
+        let (key_sender, mut key_receiver) = mpsc::channel(1);
+        let task_window = Arc::clone(&window);
+        let task_key_sender = key_sender.clone();
+        let task = tokio::spawn(async move {
+            run_session(
+                setup_deadline,
+                async move {
+                    let _permit = permit;
+                    started_sender.send(()).unwrap();
+                    std::future::pending::<Result<(TestConnection, (), Instant)>>().await
+                },
+                |_, (), _| {
+                    (
+                        std::future::pending::<io::Error>(),
+                        std::future::pending::<Result<Zeroizing<[u8; 32]>>>(),
+                    )
+                },
+                &task_window,
+                &task_key_sender,
+                phase_changed,
+                |_, _| {},
+            )
+            .await
+        });
+
+        started_receiver.await.unwrap();
+        tokio::time::advance(CONNECTION_TIMEOUT).await;
+
+        let error = task.await.unwrap().unwrap_err();
+        assert_eq!(
+            error.downcast_ref::<io::Error>().unwrap().kind(),
+            io::ErrorKind::TimedOut
+        );
+        assert_eq!(pending.available_permits(), 1);
+        assert_eq!(window.phase(), OperationPhase::Setup);
+        assert!(key_receiver.try_recv().is_err());
+
+        let phase_changed = window.phase_changed.subscribe();
+        let (connection, _) = test_connection();
+        let setup_window = Arc::clone(&window);
+        run_session(
+            Instant::now() + CONNECTION_TIMEOUT,
+            async move { establish_test_session(&setup_window, connection).await },
+            |_, (), _| {
+                (std::future::pending::<io::Error>(), async {
+                    Ok(Zeroizing::new([0x7e; 32]))
+                })
+            },
+            &window,
+            &key_sender,
+            phase_changed,
+            |_, _| {},
+        )
+        .await
+        .unwrap();
+        assert_eq!(*key_receiver.try_recv().unwrap(), [0x7e; 32]);
     }
 
     #[tokio::test(start_paused = true)]
@@ -1041,31 +1217,122 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn a_verified_response_at_expiry_never_reaches_the_key_channel() {
-        let (window, _) = OperationWindow::new();
-        window.begin_approval().unwrap();
-        tokio::time::advance(APPROVAL_TIMEOUT).await;
-        let (sender, mut receiver) = mpsc::channel(1);
+    async fn production_session_accepts_approval_just_before_expiry() {
+        let (window, phase_changed) = OperationWindow::new();
+        let window = Arc::new(window);
+        let (started_sender, started_receiver) = tokio::sync::oneshot::channel();
+        let (connection, _) = test_connection();
+        let (key_sender, mut key_receiver) = mpsc::channel(1);
+        let setup_deadline = Instant::now() + CONNECTION_TIMEOUT;
+        let task_window = Arc::clone(&window);
+        let setup_window = Arc::clone(&task_window);
+        let task = tokio::spawn(async move {
+            run_session(
+                setup_deadline,
+                async move { establish_test_session(&setup_window, connection).await },
+                move |_, (), approval_deadline| {
+                    (std::future::pending::<io::Error>(), async move {
+                        started_sender.send(()).unwrap();
+                        tokio::time::sleep_until(approval_deadline - Duration::from_millis(1))
+                            .await;
+                        Ok(Zeroizing::new([0x6d; 32]))
+                    })
+                },
+                &task_window,
+                &key_sender,
+                phase_changed,
+                |_, _| {},
+            )
+            .await
+        });
 
-        let result = arbitrate_and_consume(
-            std::future::pending(),
-            async { Ok(Zeroizing::new([0x6d; 32])) },
-            &window,
-            &sender,
-        )
-        .await;
+        started_receiver.await.unwrap();
+        tokio::time::advance(APPROVAL_TIMEOUT - Duration::from_millis(1)).await;
 
-        assert!(result.is_err());
-        assert_eq!(window.phase(), OperationPhase::Expired);
-        assert!(receiver.try_recv().is_err());
+        task.await.unwrap().unwrap();
+        assert_eq!(*key_receiver.try_recv().unwrap(), [0x6d; 32]);
+        assert_eq!(window.phase(), OperationPhase::Consumed);
     }
 
     #[tokio::test(start_paused = true)]
-    async fn cancellation_prevents_key_consumption() {
-        let (window, _) = OperationWindow::new();
-        window.begin_approval().unwrap();
+    async fn production_session_rejects_a_response_at_expiry() {
+        let (window, phase_changed) = OperationWindow::new();
+        let window = Arc::new(window);
+        let (started_sender, started_receiver) = tokio::sync::oneshot::channel();
+        let (connection, closed) = test_connection();
+        let (key_sender, mut key_receiver) = mpsc::channel(1);
+        let setup_deadline = Instant::now() + CONNECTION_TIMEOUT;
+        let task_window = Arc::clone(&window);
+        let setup_window = Arc::clone(&task_window);
+        let task = tokio::spawn(async move {
+            run_session(
+                setup_deadline,
+                async move { establish_test_session(&setup_window, connection).await },
+                move |_, (), _| {
+                    (std::future::pending::<io::Error>(), async move {
+                        started_sender.send(()).unwrap();
+                        std::future::pending::<Result<Zeroizing<[u8; 32]>>>().await
+                    })
+                },
+                &task_window,
+                &key_sender,
+                phase_changed,
+                |connection, _| connection.0.store(true, Ordering::SeqCst),
+            )
+            .await
+        });
+
+        started_receiver.await.unwrap();
+        tokio::time::advance(APPROVAL_TIMEOUT).await;
+
+        let error = task.await.unwrap().unwrap_err();
+        assert_eq!(
+            error.downcast_ref::<io::Error>().unwrap().kind(),
+            io::ErrorKind::TimedOut
+        );
+        assert_eq!(window.phase(), OperationPhase::Expired);
+        assert!(closed.load(Ordering::SeqCst));
+        assert!(key_receiver.try_recv().is_err());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn listener_cancellation_closes_the_live_session_without_consuming_a_key() {
+        let (window, phase_changed) = OperationWindow::new();
+        let window = Arc::new(window);
+        let (started_sender, started_receiver) = tokio::sync::oneshot::channel();
+        let (connection, closed) = test_connection();
+        let (key_sender, mut key_receiver) = mpsc::channel(1);
+        let setup_deadline = Instant::now() + CONNECTION_TIMEOUT;
+        let task_window = Arc::clone(&window);
+        let setup_window = Arc::clone(&task_window);
+        let task = tokio::spawn(async move {
+            run_session(
+                setup_deadline,
+                async move { establish_test_session(&setup_window, connection).await },
+                move |_, (), _| {
+                    (std::future::pending::<io::Error>(), async move {
+                        started_sender.send(()).unwrap();
+                        std::future::pending::<Result<Zeroizing<[u8; 32]>>>().await
+                    })
+                },
+                &task_window,
+                &key_sender,
+                phase_changed,
+                |connection, _| connection.0.store(true, Ordering::SeqCst),
+            )
+            .await
+        });
+
+        started_receiver.await.unwrap();
         window.cancel();
-        assert!(window.try_consume().is_err());
+
+        let error = task.await.unwrap().unwrap_err();
+        assert_eq!(
+            error.downcast_ref::<io::Error>().unwrap().kind(),
+            io::ErrorKind::Interrupted
+        );
         assert_eq!(window.phase(), OperationPhase::Cancelled);
+        assert!(closed.load(Ordering::SeqCst));
+        assert!(key_receiver.try_recv().is_err());
     }
 }

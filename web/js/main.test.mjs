@@ -249,6 +249,45 @@ test("the browser closes an established request when its two-minute approval win
   assert.match(ui.element("#result").textContent, /approval window expired/u);
 });
 
+test("approval expiry closes the session and clears the key while transmission is pending", async () => {
+  const session = createSession();
+  const key = new Uint8Array(32).fill(0x5a);
+  let resolveSendStarted;
+  let rejectSend;
+  let transmittedKey;
+  const sendStarted = new Promise((resolve) => { resolveSendStarted = resolve; });
+  session.sendKey = (value) => {
+    transmittedKey = value;
+    resolveSendStarted();
+    return new Promise((_resolve, reject) => { rejectSend = reject; });
+  };
+  const close = session.close.bind(session);
+  session.close = () => {
+    close();
+    rejectSend?.(new Error("transport closed"));
+  };
+  const ui = startApprovalUi({
+    connectHandoff: async () => session,
+    createApprovalAssertion: async () => ({ key, assertion: {} }),
+  });
+  await settle();
+
+  const sending = ui.click("#approve-request");
+  await sendStarted;
+  assert.deepEqual(ui.timerDelays(), [120_000]);
+
+  ui.fireTimers();
+  await sending;
+
+  assert.equal(session.closed, true);
+  assert.equal(transmittedKey, key);
+  assert.equal(key.every((byte) => byte === 0), true);
+  assert.equal(ui.element("#approve-request").disabled, true);
+  assert.equal(ui.element("#cancel-request").disabled, true);
+  assert.match(ui.element("#result").textContent, /approval window expired/u);
+  assert.doesNotMatch(ui.element("#result").textContent, /Approval sent/u);
+});
+
 test("approval expiry aborts a pending WebAuthn ceremony before it can send a key", async () => {
   const session = createSession();
   let assertionSignal;

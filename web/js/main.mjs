@@ -25,6 +25,7 @@ let connectionTimeout = null;
 let approvalTimeout = null;
 let connectionExpired = false;
 let approvalExpired = false;
+let approvalKey = null;
 
 function show(value) {
   result.textContent = typeof value === "string" ? value : JSON.stringify(value, null, 2);
@@ -56,6 +57,8 @@ function expireApproval() {
   approvalTimeout = null;
   if (!approvalSession?.isActive()) return;
   approvalExpired = true;
+  approvalKey?.fill(0);
+  approvalKey = null;
   approvalController?.abort();
   approvalSession.close();
   approveButton.disabled = true;
@@ -184,6 +187,8 @@ async function startApprovalFlow() {
     approvalTimeout = setTimeout(expireApproval, request.approvalTimeoutMs);
     approvalSession.failed.then((error) => {
       clearApprovalTimeout();
+      approvalKey?.fill(0);
+      approvalKey = null;
       if (approvalController) approvalController.abort();
       approveButton.disabled = true;
       cancelButton.disabled = true;
@@ -222,16 +227,20 @@ approveButton.addEventListener("click", async () => {
     if (!approvalSession.isActive()) {
       throw approvalSession.failure() ?? new Error("The CLI approval session is closed.");
     }
+    approvalKey = key;
     // Cancellation is available through the WebAuthn ceremony. Once the
     // approved response starts going onto the stream, prevent a late click
     // from appearing to cancel an operation that may already be received.
-    clearApprovalTimeout();
     cancelButton.disabled = true;
     await approvalSession.sendKey(key, approved.assertion);
+    if (approvalExpired) {
+      throw new DOMException("Approval window expired.", "TimeoutError");
+    }
+    clearApprovalTimeout();
     show("Approval sent. Check the CLI for the operation result.");
     cancelButton.disabled = true;
   } catch (error) {
-    const cancelled = approvalController.signal.aborted;
+    const cancelled = approvalCancelled;
     if (approvalExpired) {
       show("The CLI approval window expired. Start a new CLI operation.");
     } else {
@@ -243,6 +252,7 @@ approveButton.addEventListener("click", async () => {
     else approveButton.disabled = false;
   } finally {
     key?.fill(0);
+    if (approvalKey === key) approvalKey = null;
     approvalController = null;
   }
 });
