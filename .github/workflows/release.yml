@@ -1,0 +1,331 @@
+name: release
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: Request the reviewed first release PR or recover a failed draft release
+        required: true
+        type: choice
+        options:
+          - first-release
+          - recover
+      release_as:
+        description: Use 0.1.0 only for the first release PR
+        required: false
+        type: string
+      tag:
+        description: Existing vX.Y.Z draft tag to recover
+        required: false
+        type: string
+
+concurrency:
+  group: release-${{ github.repository }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  release-please:
+    name: release-please
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+      version: ${{ steps.release.outputs.version }}
+      sha: ${{ steps.release.outputs.sha }}
+    steps:
+      - name: Validate workflow dispatch
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OPERATION: ${{ inputs.operation }}
+          RELEASE_AS: ${{ inputs.release_as }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/main || {
+            echo "Run release operations from main." >&2
+            exit 1
+          }
+          case "$OPERATION" in
+            first-release)
+              test "$RELEASE_AS" = 0.1.0 || {
+                echo "The first release trigger must request version 0.1.0." >&2
+                exit 1
+              }
+              test -z "$TAG" || {
+                echo "Do not supply a tag when requesting the first release PR." >&2
+                exit 1
+              }
+              set +e
+              git ls-remote --exit-code --refs "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git" refs/tags/v0.1.0 >/dev/null
+              tag_status=$?
+              set -e
+              if [[ "$tag_status" == 0 ]]; then
+                echo "Tag v0.1.0 already exists; do not start the first-release flow." >&2
+                exit 1
+              elif [[ "$tag_status" != 2 ]]; then
+                echo "Could not verify that tag v0.1.0 is absent." >&2
+                exit 1
+              fi
+              ;;
+            recover)
+              test -z "$RELEASE_AS" || {
+                echo "Recovery does not accept a version override." >&2
+                exit 1
+              }
+              [[ "$TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || {
+                echo "Recovery requires an existing vX.Y.Z tag." >&2
+                exit 1
+              }
+              ;;
+            *)
+              echo "Unknown release operation." >&2
+              exit 1
+              ;;
+          esac
+
+      - name: Require a workflow token that triggers CI
+        if: ${{ github.event_name == 'push' || inputs.operation == 'first-release' }}
+        env:
+          RELEASE_PLEASE_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN }}
+        run: |
+          test -n "$RELEASE_PLEASE_TOKEN" || {
+            echo "Configure the RELEASE_PLEASE_TOKEN secret; GITHUB_TOKEN does not trigger release PR checks." >&2
+            exit 1
+          }
+
+      - uses: googleapis/release-please-action@v4
+        id: release
+        if: ${{ github.event_name == 'push' || inputs.operation == 'first-release' }}
+        with:
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+          release-as: ${{ inputs.release_as }}
+
+  package-release:
+    name: package-verify-publish
+    needs: release-please
+    if: ${{ needs.release-please.outputs.release_created == 'true' || (github.event_name == 'workflow_dispatch' && inputs.operation == 'recover') }}
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - name: Validate selected tag
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          OPERATION: ${{ inputs.operation }}
+          RELEASE_CREATED: ${{ needs.release-please.outputs.release_created }}
+          RELEASE_TAG: ${{ needs.release-please.outputs.tag_name }}
+          RECOVERY_TAG: ${{ inputs.tag }}
+          RELEASE_VERSION: ${{ needs.release-please.outputs.version }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" == workflow_dispatch && "$OPERATION" == recover ]]; then
+            test -z "$RELEASE_CREATED"
+            [[ "$RECOVERY_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+            test -z "$RELEASE_VERSION"
+          else
+            test "$RELEASE_CREATED" = true
+            test "$RELEASE_TAG" = "v$RELEASE_VERSION"
+          fi
+
+      - name: Select tag
+        id: select-tag
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          OPERATION: ${{ inputs.operation }}
+          RELEASE_TAG: ${{ needs.release-please.outputs.tag_name }}
+          RECOVERY_TAG: ${{ inputs.tag }}
+        run: |
+          if [[ "$EVENT_NAME" == workflow_dispatch && "$OPERATION" == recover ]]; then
+            echo "tag=$RECOVERY_TAG" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.select-tag.outputs.tag }}
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-gnu
+
+      - name: Verify tag, draft, and version
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.select-tag.outputs.tag }}
+          EVENT_NAME: ${{ github.event_name }}
+          OPERATION: ${{ inputs.operation }}
+          RELEASE_CREATED: ${{ needs.release-please.outputs.release_created }}
+          RELEASE_SHA: ${{ needs.release-please.outputs.sha }}
+          EVENT_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          git fetch origin main --no-tags
+          tag_sha="$(git rev-parse "$RELEASE_TAG^{commit}")"
+          git merge-base --is-ancestor "$tag_sha" origin/main || {
+            echo "Release tag is not reachable from main." >&2
+            exit 1
+          }
+          if [[ "$EVENT_NAME" == push ]]; then
+            test "$RELEASE_CREATED" = true
+            test "$tag_sha" = "$RELEASE_SHA"
+            test "$tag_sha" = "$EVENT_SHA"
+          else
+            test "$OPERATION" = recover
+          fi
+          python3 - "$RELEASE_TAG" <<'PY'
+          import pathlib
+          import re
+          import sys
+          import tomllib
+
+          tag = sys.argv[1]
+          match = re.fullmatch(r"v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)", tag)
+          if not match:
+              raise SystemExit(f"Invalid release tag: {tag}")
+          version = match.group(1) + "." + match.group(2) + "." + match.group(3)
+          manifest = tomllib.loads(pathlib.Path("Cargo.toml").read_text())
+          if manifest["package"]["version"] != version:
+              raise SystemExit("Release tag does not match Cargo.toml")
+          PY
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" > "$RUNNER_TEMP/release-before.json"
+          python3 - "$RUNNER_TEMP/release-before.json" "$RELEASE_TAG" <<'PY'
+          import json
+          import sys
+
+          release = json.load(open(sys.argv[1], encoding="utf-8"))
+          if release.get("tag_name") != sys.argv[2] or release.get("draft") is not True:
+              raise SystemExit("Expected the matching GitHub release to remain a draft")
+          PY
+
+      - name: Build Linux x86_64 executable
+        run: cargo build --locked --release --target x86_64-unknown-linux-gnu --bin creds
+
+      - name: Package assets and smoke check the extracted executable
+        env:
+          RELEASE_TAG: ${{ steps.select-tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          binary="target/x86_64-unknown-linux-gnu/release/creds"
+          version="${RELEASE_TAG#v}"
+          mkdir -p dist
+          python3 scripts/package_release.py \
+            --version "$version" \
+            --binary "$binary" \
+            --output-dir dist
+          extract_dir="$RUNNER_TEMP/creds-package-smoke"
+          mkdir -p "$extract_dir"
+          tar -xzf "dist/creds-v${version}-x86_64-unknown-linux-gnu.tar.gz" -C "$extract_dir"
+          packaged_binary="$extract_dir/creds-v${version}-x86_64-unknown-linux-gnu/creds"
+          file "$packaged_binary" | grep -E 'ELF 64-bit.*x86-64'
+          readelf -h "$packaged_binary" | grep -E 'Machine:.*Advanced Micro Devices X86-64'
+          if ldd "$packaged_binary" | grep -F 'not found'; then
+            echo "The packaged executable has an unresolved dynamic library." >&2
+            exit 1
+          fi
+          "$packaged_binary" --help >/dev/null
+          cd dist
+          sha256sum "creds-v${version}-x86_64-unknown-linux-gnu.tar.gz" "creds-web-v${version}.zip" > SHA256SUMS
+          sha256sum --check SHA256SUMS
+
+      - name: Remove stale draft assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.select-tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          release_id="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" --jq .id)"
+          gh api "repos/$GITHUB_REPOSITORY/releases/$release_id" > "$RUNNER_TEMP/release-before-assets.json"
+          python3 - "$RUNNER_TEMP/release-before-assets.json" "$RELEASE_TAG" <<'PY'
+          import json
+          import sys
+
+          release = json.load(open(sys.argv[1], encoding="utf-8"))
+          if release.get("tag_name") != sys.argv[2] or release.get("draft") is not True:
+              raise SystemExit("Expected the matching GitHub release to remain a draft")
+          PY
+          expected="$(python3 - "$RELEASE_TAG" <<'PY'
+          import sys
+          from scripts.verify_release_assets import expected_asset_names
+          print("\n".join(expected_asset_names(sys.argv[1])))
+          PY
+          )"
+          gh api --paginate "repos/$GITHUB_REPOSITORY/releases/$release_id/assets" --jq '.[] | [.id, .name] | @tsv' > "$RUNNER_TEMP/release-assets.tsv"
+          while IFS=$'\t' read -r asset_id asset_name; do
+            [[ -n "$asset_id" ]] || continue
+            if ! printf '%s\n' "$expected" | grep -Fxq -- "$asset_name"; then
+              gh api --method DELETE "repos/$GITHUB_REPOSITORY/releases/assets/$asset_id"
+            fi
+          done < "$RUNNER_TEMP/release-assets.tsv"
+
+      - name: Upload assets to draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.select-tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          release_id="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" --jq .id)"
+          gh api "repos/$GITHUB_REPOSITORY/releases/$release_id" > "$RUNNER_TEMP/release-before-upload.json"
+          python3 - "$RUNNER_TEMP/release-before-upload.json" "$RELEASE_TAG" <<'PY'
+          import json
+          import sys
+
+          release = json.load(open(sys.argv[1], encoding="utf-8"))
+          if release.get("tag_name") != sys.argv[2] or release.get("draft") is not True:
+              raise SystemExit("Expected the matching GitHub release to remain a draft")
+          PY
+          version="${RELEASE_TAG#v}"
+          gh release upload "$RELEASE_TAG" \
+            "dist/creds-v${version}-x86_64-unknown-linux-gnu.tar.gz" \
+            "dist/creds-web-v${version}.zip" \
+            dist/SHA256SUMS \
+            --clobber
+
+      - name: Download and verify every uploaded byte
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.select-tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          download_dir="$RUNNER_TEMP/release-assets"
+          mkdir -p "$download_dir"
+          gh release download "$RELEASE_TAG" --dir "$download_dir"
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" > "$RUNNER_TEMP/release-after.json"
+          python3 scripts/verify_release_assets.py \
+            --tag "$RELEASE_TAG" \
+            --local-dir dist \
+            --downloaded-dir "$download_dir" \
+            --release-json "$RUNNER_TEMP/release-after.json"
+
+      - name: Publish verified release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.select-tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          release_id="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" --jq .id)"
+          gh api "repos/$GITHUB_REPOSITORY/releases/$release_id" > "$RUNNER_TEMP/release-before-publish.json"
+          python3 scripts/verify_release_assets.py \
+            --tag "$RELEASE_TAG" \
+            --local-dir dist \
+            --downloaded-dir "$RUNNER_TEMP/release-assets" \
+            --release-json "$RUNNER_TEMP/release-before-publish.json"
+          gh release edit "$RELEASE_TAG" --draft=false --verify-tag

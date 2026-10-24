@@ -53,7 +53,9 @@ The label entered during setup is one DNS label, such as `workstation`. The brow
 
 Create a discoverable ES256 passkey on the trusted app page. The page confirms PRF support and displays the public key as unpadded base64url DER SubjectPublicKeyInfo. Copy this public key into the local setup prompt. The public key is not secret; the CLI retains it in its configuration so it can verify future assertions. The matching private credential remains with the authenticator or passkey provider.
 
-Build and install the CLI from the repository:
+You can download a versioned Linux x86_64 executable and verify its checksum. See [release operations](releasing.md) for the package name, compatibility requirements, and install layout. The archive contains the executable, license, and README. Put `creds` on your `PATH`, or run it from the extracted directory.
+
+You can also build and install the CLI from the repository:
 
 ~~~sh
 cargo install --path .

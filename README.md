@@ -8,6 +8,8 @@ Open the static web client at the trusted deployment origin and copy its exporte
 
 The static host must serve the page over HTTPS, use restrictive response headers, and serve JavaScript modules with a JavaScript MIME type. Follow the [deployment and operator guide](docs/deployment.md) to set the exact app origin, RP ID, DNS suffix, CSP, CLI configuration, storage permissions, and UDP route.
 
+See [release operations](docs/releasing.md) for versioned downloads, checksums, static archive layout, and GitHub release procedures.
+
 ## Test
 
 Run the same command used by GitHub Actions:
