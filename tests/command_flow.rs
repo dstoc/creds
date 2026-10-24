@@ -33,6 +33,25 @@ const MACHINE_DNS_SUFFIX: &str = "tailnet.example.net";
 const MAX_STARTUP: Duration = Duration::from_secs(15);
 const MAX_COMMAND: Duration = Duration::from_secs(20);
 
+#[test]
+fn production_cli_help_omits_the_development_probe_server() {
+    let help = Command::new(env!("CARGO_BIN_EXE_creds"))
+        .arg("--help")
+        .output()
+        .expect("run production CLI help");
+    assert!(help.status.success());
+    let help_text = String::from_utf8(help.stdout).unwrap();
+    assert!(help_text.contains("setup|check|encrypt NAME INPUT|decrypt NAME OUTPUT"));
+    assert!(!help_text.contains("probe"));
+
+    let rejected = Command::new(env!("CARGO_BIN_EXE_creds"))
+        .arg("probe-server")
+        .output()
+        .expect("run removed production CLI command");
+    assert!(!rejected.status.success());
+    assert!(!String::from_utf8_lossy(&rejected.stderr).contains("probe-server"));
+}
+
 /// This deterministic key stands in for a passkey credential in the protocol fixture.
 /// It exercises real signature verification, but it is not a physical authenticator.
 fn fixture_signing_key() -> SigningKey {

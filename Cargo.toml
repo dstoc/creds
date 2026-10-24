@@ -5,6 +5,14 @@ edition = "2024"
 description = "Browser-approved credential encryption"
 license = "MIT"
 
+[features]
+dev-tools = []
+
+[[bin]]
+name = "creds-probe-server"
+path = "dev/transport_probe.rs"
+required-features = ["dev-tools"]
+
 [dependencies]
 base64 = "0.23.1"
 aes-gcm = "0.11.1"

@@ -6,7 +6,7 @@
     <meta name="creds-dns-suffix" content="tailnet.example.net">
     <meta name="referrer" content="no-referrer">
     <meta http-equiv="Content-Security-Policy" content="default-src 'none'; base-uri 'none'; form-action 'none'; img-src 'self' data:; script-src 'self'; style-src 'self'; connect-src 'self' https://*.tailnet.example.net:* https://*.localhost:* https://127.0.0.1:*; object-src 'none'">
-    <title>creds browser approval and setup</title>
+    <title>creds passkey setup and approval</title>
     <link rel="icon" type="image/svg+xml" href="favicon.svg">
     <link rel="stylesheet" href="style.css">
     <script type="module" src="js/main.mjs"></script>
@@ -14,7 +14,7 @@
   <body>
     <main>
       <header>
-        <p id="eyebrow" class="eyebrow">creds · browser setup</p>
+        <p id="eyebrow" class="eyebrow">creds · passkey setup</p>
         <h1 id="page-title">Create a creds passkey</h1>
         <p id="page-intro" class="intro">Create a discoverable ES256 passkey, confirm PRF support, and export its public key for local CLI setup. This page does not store passkeys or setup data.</p>
       </header>
@@ -34,8 +34,7 @@
         </div>
       </section>
 
-      <div id="probe-tools">
-      <section aria-labelledby="create-passkey-title">
+      <section id="setup-panel" aria-labelledby="create-passkey-title">
         <h2 id="create-passkey-title">Create passkey</h2>
         <label for="passkey-label">Passkey label</label>
         <input id="passkey-label" type="text" value="creds passkey" maxlength="64" autocomplete="off">
@@ -48,31 +47,11 @@
         <p id="public-key-help">Save this public key for <code>creds setup</code>. It is public setup material. The matching private key stays with the passkey provider.</p>
       </section>
 
-      <section aria-labelledby="transport-title">
-        <h2 id="transport-title">Pinned WebTransport</h2>
-        <p>Start <code>creds probe-server</code> in a terminal, then copy its URL and certificate hash here.</p>
-        <label for="endpoint">Local Rust endpoint</label>
-        <input id="endpoint" type="url" inputmode="url" placeholder="https://127.0.0.1:PORT/key" autocomplete="off" spellcheck="false">
-        <label for="certificate-hash">SHA-256 certificate hash (base64url)</label>
-        <input id="certificate-hash" type="text" placeholder="Printed by creds probe-server" autocomplete="off" spellcheck="false">
-        <div class="actions">
-          <button id="positive-pin" type="button">Test matching pin and echo</button>
-          <button id="negative-pin" class="secondary" type="button">Test mismatched pin</button>
-        </div>
-      </section>
-
-      <section aria-labelledby="prf-title">
-        <h2 id="prf-title">WebAuthn PRF compatibility probe</h2>
-        <p>This creates one discoverable test credential for RP ID <code>localhost</code> per page session, then targets it explicitly for two PRF assertions. Later checks in the same page reuse the credential in memory. Use the documented virtual authenticator. A real authenticator may retain the test credential until you remove it.</p>
-        <button id="test-prf" type="button">Create test credential and evaluate PRF</button>
-      </section>
-      </div>
-
       <section class="result" aria-labelledby="result-title">
         <h2 id="result-title">Result</h2>
-        <pre id="result" role="status" aria-live="polite">Ready. This page is a local compatibility fixture, not the production approval app.</pre>
+        <pre id="result" role="status" aria-live="polite">Ready. Create a passkey for local CLI setup or approve a CLI request.</pre>
       </section>
-      <footer id="page-footer">Local probes do not establish compatibility with real devices, passkey providers, or deployment network paths.</footer>
+      <footer id="page-footer">Passkeys stay with your authenticator or passkey provider. This page stores no application data.</footer>
     </main>
   </body>
 </html>

@@ -217,15 +217,17 @@ Keep keys out of arguments, environment variables, logs, browser storage and app
 
 ## Implementation shape
 
-The web app consists of static files: `web/index.html`, `web/style.css`, and a small set of native JavaScript ES modules loaded with `<script type="module">`. Serve these files directly over HTTPS, without a frontend framework, bundler, transpiler, package dependencies or build step. Use ordinary relative module imports. There is no Bend 2 compilation path.
+The web app consists of static files: `web/index.html`, `web/style.css`, and a small set of native JavaScript ES modules loaded with `<script type="module">`. Serve these files directly over HTTPS, without a frontend framework, bundler, transpiler, package dependencies or build step. Use ordinary relative module imports. There is no Bend 2 compilation path. The deployed `web/` tree contains the real user-facing Create passkey setup flow and approval flow. It contains no compatibility probe UI or test-passkey creation.
 
 Keep modules focused on visible responsibilities: page rendering and approval actions, WebAuthn setup/assertion/PRF operations, key derivation, and WebTransport framing/session handling. Choose file boundaries to keep these responsibilities easy to inspect; do not add a plugin system or generic frontend architecture. The browser uses built-in DOM, WebAuthn, Web Crypto and WebTransport APIs. The static host must serve JavaScript modules with an appropriate JavaScript MIME type and apply the security headers described above.
 
 Use a single Rust crate with small modules for CLI/configuration, envelope/AEAD, and the temporary transport session. Candidate dependencies are `wtransport` with its supported TLS stack, a certificate generator such as `rcgen`, `aes-gcm`, `serde`/`serde_json`, `base64`, `zeroize`, a CLI parser, and a QR encoder. Confirm current crate APIs and security properties during implementation; pin the dependency lockfile. Add a focused assertion-verification module using an established ES256 implementation and bounded WebAuthn parsing. Evaluate a small WebAuthn verification library against this fixed single-credential use case; avoid account/session frameworks. No custom cryptographic primitives, plugin system or generic transport abstraction is needed.
 
+Keep compatibility experiments under `dev/`, outside the deployed `web/` tree. Build the loopback WebTransport echo fixture only with a development feature and separate binary. Keep test-passkey creation and raw PRF/WebTransport probes out of the production page modules and default CLI. Document local server and Chromium virtual-authenticator commands for these development tools. The CI `test` check should verify the separation and run focused development-tool tests.
+
 Implement in this order:
 
-1. Prove pinned browser-to-Rust WebTransport and PRF evaluation on the actual intended devices. Check local-network permission prompts, UDP reachability, and passkey support before building the full tool.
+1. Keep repeatable pinned WebTransport and test-passkey PRF experiments in development tools. Use local Chromium checks during implementation. Check physical authenticators, local-network permission prompts, and deployment UDP reachability as separate release checks.
 2. Implement passkey public-key export, CLI setup, and assertion verification with fixed positive and negative fixtures.
 3. Implement envelope encryption/decryption and fixed key-derivation vectors.
 4. Join the components with the three-message protocol and approval page.
@@ -269,4 +271,4 @@ Implement in this order:
 ## Standards references
 
 - [WebAuthn PRF extension](https://www.w3.org/TR/webauthn-3/#prf-extension): credential-specific pseudorandom outputs for key derivation. The same ceremony supplies an assertion for CLI client authentication. See also [public-key export](https://www.w3.org/TR/webauthn-3/#dom-authenticatorattestationresponse-getpublickey) and [assertion verification](https://www.w3.org/TR/webauthn-3/#sctn-verifying-assertion).
-- [WebTransport specification](https://www.w3.org/TR/webtransport/): certificate-hash authentication and custom certificate constraints, plus the distinction between server pinning and client authentication. Browser support and local-network access behavior must be verified in the initial compatibility step.
+- [WebTransport specification](https://www.w3.org/TR/webtransport/): certificate-hash authentication and custom certificate constraints, plus the distinction between server pinning and client authentication. Development probes check local browser behavior; physical-device and deployed-network compatibility remain separate release checks.
