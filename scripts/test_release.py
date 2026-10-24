@@ -203,13 +203,31 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("if: ${{ github.event_name == 'push' }}", action_step)
         self.assertNotIn("release-as:", action_step)
 
-    def test_release_prs_use_a_token_that_triggers_the_existing_check(self) -> None:
+    def test_release_uses_builtin_token_and_supports_manual_pr_checks(self) -> None:
         workflow = (REPO_ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
         test_workflow = (REPO_ROOT / ".github/workflows/test.yml").read_text(encoding="utf-8")
-        self.assertIn("RELEASE_PLEASE_TOKEN", workflow)
-        self.assertIn("token: ${{ secrets.RELEASE_PLEASE_TOKEN }}", workflow)
+        docs = (REPO_ROOT / "docs/releasing.md").read_text(encoding="utf-8")
+
+        self.assertNotIn("RELEASE_PLEASE_TOKEN", workflow)
+        self.assertNotIn("RELEASE_PLEASE_TOKEN", docs)
+        self.assertIn("contents: write", workflow)
+        self.assertIn("issues: write", workflow)
+        self.assertIn("pull-requests: write", workflow)
+        self.assertIn("token: ${{ github.token }}", workflow)
+        first_release = workflow.split("      - name: Create first release PR", 1)[1].split(
+            "      - uses: googleapis/release-please-action@v4", 1
+        )[0]
+        self.assertIn("GH_TOKEN: ${{ github.token }}", first_release)
+        self.assertIn('--token="$GH_TOKEN"', first_release)
+        self.assertNotIn("Require a workflow token", workflow)
+
+        self.assertIn("workflow_dispatch:", test_workflow)
         self.assertIn("name: test", test_workflow)
         self.assertIn("./scripts/test.sh", test_workflow)
+        self.assertIn("After Release Please creates or updates its PR", docs)
+        self.assertIn("Select the PR's head branch", docs)
+        self.assertIn("current head SHA", docs)
+        self.assertIn("GITHUB_TOKEN", docs)
 
     def test_recovery_is_limited_to_existing_drafts_and_publish_follows_verification(self) -> None:
         workflow = (REPO_ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")

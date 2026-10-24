@@ -44,9 +44,15 @@ The archive does not configure HTTP response headers. Serve `.mjs` files with `t
 
 ## Configure GitHub Actions
 
-Create the repository secret `RELEASE_PLEASE_TOKEN`. Use a fine-grained personal access token with access to this repository and permission to read and write contents, pull requests, and issues. Release Please needs write access to update the release PR, create the tag and draft, and apply its release labels. Set an expiration and rotate the secret before it expires. A token other than the built-in `GITHUB_TOKEN` is required because events created with `GITHUB_TOKEN` do not start other workflow runs. Without a different token, the generated release PR will not receive the existing `test` check.
+The release workflow uses its built-in `GITHUB_TOKEN`. Its `release-please` job has write permission for contents, issues, and pull requests. In **Settings → Actions → General**, allow GitHub Actions to create pull requests.
 
-In **Settings → Actions → General**, allow GitHub Actions to create pull requests. Keep the existing required check named `test`; the test workflow runs `./scripts/test.sh` for pull requests and includes the release packaging and publication-gate tests.
+GitHub does not start `push` or `pull_request` workflows for changes made with `GITHUB_TOKEN`. The test workflow supports manual dispatch so you can run the required check named `test` on a Release Please PR:
+
+1. After Release Please creates or updates its PR, open **Actions → test → Run workflow**.
+2. Select the PR's head branch and run the workflow. It runs `./scripts/test.sh`, including the release packaging and publication-gate tests.
+3. Open the run and confirm its commit SHA matches the PR's current head SHA. Confirm the run's `test` check passed for that commit. Repeat these steps after every PR update; an earlier successful run does not verify a newer head.
+
+Keep the required branch protection check named `test`.
 
 ## First release
 
