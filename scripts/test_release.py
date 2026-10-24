@@ -7,6 +7,7 @@ import re
 import shutil
 import tarfile
 import tempfile
+import tomllib
 import unittest
 import zipfile
 from pathlib import Path
@@ -16,6 +17,7 @@ import verify_release_assets
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+FIXTURE_VERSION = "1.2.3"
 
 
 class ReleasePackagingTests(unittest.TestCase):
@@ -23,7 +25,16 @@ class ReleasePackagingTests(unittest.TestCase):
         self.temp_dir = tempfile.TemporaryDirectory()
         self.root = Path(self.temp_dir.name)
         shutil.copytree(REPO_ROOT / "web", self.root / "web")
-        shutil.copy2(REPO_ROOT / "Cargo.toml", self.root / "Cargo.toml")
+        cargo_manifest = (REPO_ROOT / "Cargo.toml").read_text(encoding="utf-8")
+        cargo_manifest, replacements = re.subn(
+            r'(?m)^version = "[^"]+"$',
+            f'version = "{FIXTURE_VERSION}"',
+            cargo_manifest,
+            count=1,
+        )
+        if replacements != 1:
+            raise AssertionError("expected one package version in Cargo.toml")
+        (self.root / "Cargo.toml").write_text(cargo_manifest, encoding="utf-8")
         shutil.copy2(REPO_ROOT / "LICENSE", self.root / "LICENSE")
         shutil.copy2(REPO_ROOT / "README.md", self.root / "README.md")
         self.binary = self.root / "creds"
@@ -36,10 +47,10 @@ class ReleasePackagingTests(unittest.TestCase):
 
     def test_release_archives_contain_only_the_production_files(self) -> None:
         binary_archive, web_archive = package_release.package_release(
-            "0.1.0", self.binary, self.output, self.root
+            FIXTURE_VERSION, self.binary, self.output, self.root
         )
         with tarfile.open(binary_archive, "r:gz") as archive:
-            prefix = "creds-v0.1.0-x86_64-unknown-linux-gnu"
+            prefix = f"creds-v{FIXTURE_VERSION}-x86_64-unknown-linux-gnu"
             self.assertEqual(
                 set(archive.getnames()),
                 {f"{prefix}/creds", f"{prefix}/LICENSE", f"{prefix}/README.md"},
@@ -47,7 +58,7 @@ class ReleasePackagingTests(unittest.TestCase):
             self.assertTrue(archive.getmember(f"{prefix}/creds").mode & 0o111)
 
         with zipfile.ZipFile(web_archive) as archive:
-            prefix = "creds-web-v0.1.0"
+            prefix = f"creds-web-v{FIXTURE_VERSION}"
             expected = {f"{prefix}/{name}" for name in package_release.WEB_FILES}
             expected.add(f"{prefix}/LICENSE")
             self.assertEqual(set(archive.namelist()), expected)
@@ -60,10 +71,12 @@ class ReleasePackagingTests(unittest.TestCase):
             package_release.package_release("0.2.0", self.binary, self.output, self.root)
 
     def test_packaged_web_paths_resolve_with_the_extraction_layout(self) -> None:
-        _, web_archive = package_release.package_release("0.1.0", self.binary, self.output, self.root)
+        _, web_archive = package_release.package_release(
+            FIXTURE_VERSION, self.binary, self.output, self.root
+        )
         with zipfile.ZipFile(web_archive) as archive:
             names = set(archive.namelist())
-            prefix = "creds-web-v0.1.0/"
+            prefix = f"creds-web-v{FIXTURE_VERSION}/"
             html = archive.read(f"{prefix}index.html").decode("utf-8")
             for relative_path in ("style.css", "favicon.svg", "js/main.mjs"):
                 self.assertIn(f"{prefix}{relative_path}", names)
@@ -142,11 +155,53 @@ class WorkflowContractTests(unittest.TestCase):
     def test_release_please_uses_rust_versioning_and_keeps_releases_in_draft(self) -> None:
         config = json.loads((REPO_ROOT / "release-please-config.json").read_text(encoding="utf-8"))
         manifest = json.loads((REPO_ROOT / ".release-please-manifest.json").read_text(encoding="utf-8"))
+        cargo_manifest = tomllib.loads((REPO_ROOT / "Cargo.toml").read_text(encoding="utf-8"))
         self.assertEqual(config["release-type"], "rust")
         self.assertIs(config["draft"], True)
         self.assertIs(config["force-tag-creation"], True)
         self.assertEqual(config["packages"]["."]["release-type"], "rust")
-        self.assertEqual(manifest, {".": "0.1.0"})
+        self.assertEqual(manifest, {".": cargo_manifest["package"]["version"]})
+
+    def test_rust_manifest_candidate_tag_matches_the_release_workflow_gate(self) -> None:
+        config = json.loads((REPO_ROOT / "release-please-config.json").read_text(encoding="utf-8"))
+        package = config["packages"]["."]
+        self.assertIs(package["include-component-in-tag"], False)
+
+        cargo_manifest = tomllib.loads((REPO_ROOT / "Cargo.toml").read_text(encoding="utf-8"))
+        component = package.get("component", cargo_manifest["package"]["name"])
+        prefix = f"{component}-" if package["include-component-in-tag"] else ""
+        candidate_tag = f"{prefix}v{FIXTURE_VERSION}"
+        self.assertEqual(candidate_tag, "v1.2.3")
+        self.assertRegex(candidate_tag, r"^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
+        workflow = (REPO_ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
+        self.assertIn('test "$RELEASE_TAG" = "v$RELEASE_VERSION"', workflow)
+
+    def test_first_release_cli_override_keeps_ci_only_history_in_the_changelog(self) -> None:
+        config = json.loads((REPO_ROOT / "release-please-config.json").read_text(encoding="utf-8"))
+        visible_types = {
+            section["type"]
+            for section in config["changelog-sections"]
+            if not section.get("hidden", False)
+        }
+        self.assertIn("ci", visible_types)
+        self.assertIn("feat", visible_types)
+        self.assertIn("fix", visible_types)
+
+        workflow = (REPO_ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
+        first_release = workflow.split("      - name: Create first release PR", 1)[1].split(
+            "      - uses: googleapis/release-please-action@v4", 1
+        )[0]
+        self.assertIn("npm exec --yes --package=release-please@17.3.0", first_release)
+        self.assertIn("release-please release-pr", first_release)
+        self.assertIn("--manifest-file=.release-please-manifest.json", first_release)
+        self.assertIn('--release-as="$RELEASE_AS"', first_release)
+        self.assertIn("github.event_name == 'workflow_dispatch' && inputs.operation == 'first-release'", first_release)
+
+        action_step = workflow.split("      - uses: googleapis/release-please-action@v4", 1)[1].split(
+            "  package-release:", 1
+        )[0]
+        self.assertIn("if: ${{ github.event_name == 'push' }}", action_step)
+        self.assertNotIn("release-as:", action_step)
 
     def test_release_prs_use_a_token_that_triggers_the_existing_check(self) -> None:
         workflow = (REPO_ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")

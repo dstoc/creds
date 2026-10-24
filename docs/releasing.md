@@ -50,7 +50,9 @@ In **Settings → Actions → General**, allow GitHub Actions to create pull req
 
 ## First release
 
-The manifest starts at the current crate version, `0.1.0`. After this release setup is merged, if a push to `main` does not create the first release PR, run **Actions → release → Run workflow** on `main`, select `first-release`, and enter `0.1.0` in `release_as`. Release Please then opens the normal release PR. Review and merge that PR to create the tag and draft. This action does not create or publish a release directly.
+The manifest starts at the current crate version, `0.1.0`. After this release setup is merged, if a push to `main` does not create the first release PR, run **Actions → release → Run workflow** on `main`, select `first-release`, and enter `0.1.0` in `release_as`. This dispatch invokes the pinned Release Please CLI with the manifest and version override. It uses the same Rust release configuration and opens the normal release PR; the `ci` changelog section lets CI-only setup history produce a non-empty first changelog. Review and merge that PR to create the tag and draft. The dispatch does not create or publish a release directly.
+
+The regular push workflow continues to use `release-please-action@v4`. Keep the CLI package version aligned with the Release Please version bundled by that action when either is updated.
 
 ## Recovery
 

@@ -104,14 +104,28 @@ jobs:
             exit 1
           }
 
+      - name: Create first release PR
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.operation == 'first-release' }}
+        env:
+          RELEASE_PLEASE_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN }}
+          RELEASE_AS: ${{ inputs.release_as }}
+        run: |
+          set -euo pipefail
+          npm exec --yes --package=release-please@17.3.0 -- release-please release-pr \
+            --repo-url="$GITHUB_REPOSITORY" \
+            --target-branch=main \
+            --token="$RELEASE_PLEASE_TOKEN" \
+            --config-file=release-please-config.json \
+            --manifest-file=.release-please-manifest.json \
+            --release-as="$RELEASE_AS"
+
       - uses: googleapis/release-please-action@v4
         id: release
-        if: ${{ github.event_name == 'push' || inputs.operation == 'first-release' }}
+        if: ${{ github.event_name == 'push' }}
         with:
           token: ${{ secrets.RELEASE_PLEASE_TOKEN }}
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
-          release-as: ${{ inputs.release_as }}
 
   package-release:
     name: package-verify-publish
