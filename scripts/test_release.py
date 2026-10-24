@@ -222,11 +222,18 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertNotIn("Require a workflow token", workflow)
 
         self.assertIn("workflow_dispatch:", test_workflow)
+        self.assertIn("  pull_request:", test_workflow)
         self.assertIn("name: test", test_workflow)
         self.assertIn("./scripts/test.sh", test_workflow)
         self.assertIn("After Release Please creates or updates its PR", docs)
-        self.assertIn("Select the PR's head branch", docs)
+        self.assertIn("approval-required `pull_request` runs", docs)
+        self.assertIn("Approve workflows to run", docs)
+        self.assertIn("eligible `pull_request` event", docs)
+        self.assertIn("`workflow_dispatch` check", docs)
+        self.assertIn("does not appear in the PR checks section", docs)
+        self.assertIn("does not satisfy the required check", docs)
         self.assertIn("current head SHA", docs)
+        self.assertIn("merge status box recognizes the required check", docs)
         self.assertIn("GITHUB_TOKEN", docs)
 
     def test_recovery_is_limited_to_existing_drafts_and_publish_follows_verification(self) -> None:
