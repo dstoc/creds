@@ -77,7 +77,7 @@ function startApprovalUi({ connectHandoff, createApprovalAssertion = async () =>
     history: { replaceState(...args) { historyCalls.push(args); } },
     AbortController,
     DOMException,
-    parseHandoffFragment: () => Object.freeze({ fullHostname: "workstation.keys.example" }),
+    parseHandoffFragment: () => Object.freeze({ fullHostname: "workstation.tailnet.example.net" }),
     connectHandoff,
     createApprovalAssertion,
     createPasskey: async () => ({}),
@@ -115,7 +115,7 @@ test("approval stays disabled until the pinned request is displayed", async () =
   resolveConnection(session);
   await settle();
 
-  assert.equal(ui.element("#request-host").textContent, "workstation.keys.example");
+  assert.equal(ui.element("#request-host").textContent, "workstation.tailnet.example.net");
   assert.equal(ui.element("#request-name").textContent, "secret");
   assert.equal(ui.element("#request-revision").textContent, "7");
   assert.equal(ui.element("#request-operation").textContent, "encrypt");

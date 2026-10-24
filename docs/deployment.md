@@ -9,7 +9,7 @@ The browser app does not need an API server, account service, database, or JavaS
 
 ## Publish the static app
 
-Copy the contents of the repository's web directory to the document root of a static HTTPS host. Serve the files as files. Do not add a service worker, backend route, third-party script, analytics, remote font, or CDN dependency. Keep the deployment on one stable hostname because that hostname is both the browser origin host and the WebAuthn RP ID.
+Copy the contents of the repository's web directory to the document root of a static HTTPS host. Serve the files as files. Do not add a service worker, backend route, third-party script, analytics, remote font, or CDN dependency. Keep the approval app on one stable hostname because that hostname is both the browser origin host and the WebAuthn RP ID. Configure the machine DNS suffix separately in the trusted static app deployment.
 
 For example, if the app URL is:
 
@@ -17,11 +17,11 @@ For example, if the app URL is:
 
 then use all of these exact settings:
 
-- Set the creds-dns-suffix meta value in index.html to keys.example.com.
-- Set the connect-src CSP source to https://*.keys.example.com:* in both the HTML meta CSP and the static host's response header.
+- Set the `creds-dns-suffix` meta value in `index.html` to the tailnet DNS suffix, such as `tailnet.ts.net`.
+- Set the `connect-src` CSP source to `https://*.tailnet.ts.net:*` in both the HTML meta CSP and the static host's response header.
 - Enter https://keys.example.com/creds/ as the trusted app URL during CLI setup.
 - The browser origin is https://keys.example.com. The RP ID is keys.example.com.
-- If the CLI machine label is workstation, the browser connects to workstation.keys.example.com.
+- If the CLI machine label is `workstation`, the browser connects to `workstation.tailnet.ts.net`.
 
 The app URL can include a deployment path. Its scheme, host, and port define the exact origin. Its hostname defines the RP ID. Do not add a separate RP ID setting or use a parent domain.
 
@@ -30,22 +30,22 @@ Serve JavaScript module files, including .mjs files, with a JavaScript MIME type
 Send these response headers on every page and asset response:
 
 ~~~text
-Content-Security-Policy: default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; img-src 'self' data:; script-src 'self'; style-src 'self'; connect-src 'self' https://*.keys.example.com:*; object-src 'none'
+Content-Security-Policy: default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; img-src 'self' data:; script-src 'self'; style-src 'self'; connect-src 'self' https://*.tailnet.ts.net:*; object-src 'none'
 X-Content-Type-Options: nosniff
 Referrer-Policy: no-referrer
 ~~~
 
-Replace keys.example.com with the exact deployed app hostname in the CSP. The frame-ancestors directive must be an HTTP response header. The HTML meta CSP does not enforce that directive. Keep the HTML meta CSP in sync with the response CSP for the directives that meta CSP supports.
+Replace `tailnet.ts.net` with the configured machine DNS suffix in the CSP. Do not derive the suffix from the app hostname. The frame-ancestors directive must be an HTTP response header. The HTML meta CSP does not enforce that directive. Keep the HTML meta CSP in sync with the response CSP for the directives that meta CSP supports.
 
-The default page has an example DNS suffix and extra loopback CSP sources for local tests. Change both before publishing. Review the built static directory and host configuration to confirm that no service worker, third-party assets, or unexpected files are present.
+The default page has an example machine DNS suffix and extra loopback CSP sources for local tests. Set the meta value and both CSP policies to the same machine suffix before publishing. The app hostname remains configured in the CLI's trusted `app_url`; it can differ from this suffix. Review the built static directory and host configuration to confirm that no service worker, third-party assets, or unexpected files are present.
 
 ## Route the temporary CLI endpoint
 
-For an operation, the CLI advertises one endpoint named <machine-label>.<app-hostname> and a UDP port. Configure local or public DNS so that exact name resolves to the CLI machine from the approval device. Permit the browser device to reach that machine and UDP port. WebTransport uses HTTP/3 over QUIC, so a TCP-only web server rule is not enough.
+For an operation, the CLI QR fragment carries one machine label, the UDP port, the certificate pin, and the request ID. The approval app combines the label with its configured machine DNS suffix to construct `<machine-label>.<machine-DNS-suffix>`. Configure tailnet DNS so that exact name resolves to the CLI machine from the approval device. Permit the browser device to reach that machine and UDP port. WebTransport uses HTTP/3 over QUIC, so a TCP-only web server rule is not enough. The QR does not supply a suffix, full destination URL, or path.
 
 The default listener address is 0.0.0.0:0. This listens on all local interfaces and lets the operating system choose a UDP port for each operation. On a network that requires a fixed firewall rule, set a fixed port in the setup prompt, then allow that UDP port and route it to the CLI machine. Confirm that the chosen address is reachable from the approval device. A DNS record alone does not provide routing or UDP access.
 
-The label entered during setup is one DNS label, such as workstation. The browser appends the configured DNS suffix and rejects a suffix that does not match the page hostname. Do not set the suffix to a parent domain or a different origin.
+The label entered during setup is one DNS label, such as `workstation`. The browser validates the configured suffix and the combined hostname, then appends the suffix to this label. Configure the suffix as lowercase ASCII DNS labels without a trailing dot. The suffix is a trusted static app setting and may differ from the approval app hostname. The app URL still defines the expected WebAuthn origin and RP ID. The browser rejects QR fields that try to override the full destination, suffix, or path.
 
 ## Configure and use the CLI
 
@@ -99,8 +99,8 @@ The automated and manual checks map to the proposal as follows:
 | Proposal contract | Verification |
 | --- | --- |
 | Stable v1 PRF, HKDF, AAD, and envelope bytes | Shared fixture in test-vectors/envelope-v1.json; Rust tests in src/protocol.rs; Node tests in web/js/envelope.test.mjs |
-| Bounded parsing, malformed fields, tampering, signatures, origin, RP ID, UP/UV, and CBOR extensions | Rust tests in src/envelope.rs and src/assertion.rs; browser request and frame tests in web/js/transport.test.mjs |
-| Pinned handoff, URL fields, per-connection challenges, one valid response, replay and duplicate rejection | Rust tests in src/handoff.rs and tests/command_flow.rs; Node pin and response tests in web/js/transport.test.mjs |
+| Bounded parsing, malformed fields, tampering, signatures, origin, RP ID, UP/UV, and CBOR extensions | Rust tests in src/envelope.rs and src/assertion.rs; browser request, frame, DNS suffix, and QR override tests in web/js/transport.test.mjs |
+| Pinned handoff, URL fields, per-connection challenges, one valid response, replay and duplicate rejection | Rust tests in src/handoff.rs and tests/command_flow.rs, including a loopback CLI connection under a machine suffix different from the app RP ID; Node pin and response tests in web/js/transport.test.mjs |
 | Approval cancellation, connection loss, and safe request display | Browser tests in web/js/main.test.mjs and web/js/webauthn.test.mjs |
 | Concurrent writer exclusion, replacement snapshots, revision overflow, tampered files, and publication failures | Rust tests in src/storage.rs; the CLI snapshot race in tests/command_flow.rs |
 | Config parsing, explicit paths, storage checks, and read-only check behavior | Rust tests in src/config.rs |
@@ -109,6 +109,8 @@ The automated and manual checks map to the proposal as follows:
 | Key separation from URLs, CLI output, and published files | CLI integration assertions in tests/command_flow.rs. Code review confirms src/main.rs accepts no key argument or key environment setting; handoff keys arrive only in the bounded, assertion-verified message. |
 | One v1 protocol, fixed /key endpoint and algorithms, with no recovery or alternate transport | Source review of src/protocol.rs, src/envelope.rs, src/assertion.rs, and src/handoff.rs. This milestone adds no Rust or JavaScript dependencies. |
 | Browser API and device/network compatibility | Reproduce the Chromium virtual-authenticator checks in browser-compatibility.md. Physical passkey/provider behavior, local-network prompts, deployed DNS, and UDP reachability remain manual release checks. |
+
+The automated suffix tests use a public-style approval hostname and a different machine DNS suffix. They check configured suffix validation, the combined destination, and rejection of QR destination/suffix/path overrides. They do not resolve tailnet names or test deployed UDP reachability.
 
 The runner has no physical authenticator or deployment network. The Chromium procedure exercises loopback WebTransport and a virtual CTAP 2.1 authenticator only. Do not treat it as evidence for every browser, authenticator, passkey provider, or deployment network.
 

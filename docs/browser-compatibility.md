@@ -16,7 +16,7 @@ Run date: 2026-10-24.
 
 ## Automated browser coverage
 
-`./scripts/test.sh` runs the browser-module tests under Node.js. `main.test.mjs` uses a lightweight fake DOM and mocked handoff sessions to cover request display, cancel during connection and WebAuthn, session loss, and the one-approval send path. `transport.test.mjs` uses a mocked WebTransport implementation for framing, pin configuration, extra data, and failure handling. `webauthn.test.mjs` supplies mocked WebAuthn responses for PRF and assertion construction. These tests check application control flow; they do not stand in for a browser or authenticator.
+`./scripts/test.sh` runs the browser-module tests under Node.js. `main.test.mjs` uses a lightweight fake DOM and mocked handoff sessions to cover request display, cancel during connection and WebAuthn, session loss, and the one-approval send path. `transport.test.mjs` uses a mocked WebTransport implementation for framing, pin configuration, extra data, and failure handling. It also checks that the machine label combines with a deployment-configured suffix that differs from the approval hostname, and that malformed suffixes and QR destination/suffix/path overrides fail. `webauthn.test.mjs` supplies mocked WebAuthn responses for PRF and assertion construction. These tests check application control flow; they do not stand in for a browser or authenticator.
 
 The Rust `command_flow` integration test starts the compiled CLI and connects a Rust WebTransport client to the actual loopback listener. It covers file and stdin/stdout flows, replacement snapshots, rejected assertions, mismatched keys, cancellation, and preservation of existing ciphertext and output files. Its deterministic signing key and generated assertion are protocol fixtures; this test does not exercise browser WebAuthn or a passkey device.
 
@@ -29,6 +29,8 @@ Chromium connected to the Rust `wtransport` listener with the printed SHA-256 ce
 Chromium then tried the same URL with one bit changed in the expected certificate hash. The session failed with `WebTransportError: Opening handshake failed`; the browser console reported `QUIC_TLS_CERTIFICATE_UNKNOWN`. The positive case completed first against the same live endpoint.
 
 The local self-signed certificate was permitted with the browser's local insecure-certificate test setting (`--ignore-certificate-errors` for direct Chromium launch, and `--acceptInsecureCerts true` in the Chrome DevTools controlled context). The mismatched hash still failed in both checks. These settings permit the local test certificate; they do not replace the `serverCertificateHashes` check. The authenticated handoff below also uses the hash pin and checks the configured Origin.
+
+Run date: 2026-10-24. Chromium 156 also connected from the local static page at `http://localhost:8000` to `https://workstation.tailnet.example.net:<port>/key`. A Chromium host resolver rule mapped that example machine hostname to loopback. The server certificate name did not match the machine hostname; the matching SHA-256 hash succeeded and a one-bit pin change failed. This exercised a local WebTransport echo with separate app and machine hostnames. It did not exercise the creds approval protocol, a tailnet resolver, or deployed UDP reachability.
 
 ### WebAuthn PRF
 
@@ -48,7 +50,7 @@ This used the real Chromium WebAuthn APIs with a temporary CDP-controlled CTAP 2
 
 Run date: 2026-10-24. Chromium 156 connected to a per-operation Rust WebTransport listener with the certificate hash from the QR fragment. The page removed the fragment, displayed `workstation.localhost`, the exact name, revision, and operation, and required an explicit approval click. The configured Origin was `https://localhost:8000`. The CLI accepted the assertion from the same connection, encrypted revision 1, then decrypted it in a second approved operation. The decrypted output matched the source byte-for-byte, including a NUL byte.
 
-This used the CDP-controlled CTAP 2.1 virtual authenticator with PRF support. The runner's system resolver did not resolve `workstation.localhost`; Chromium needed `--host-resolver-rules='MAP workstation.localhost 127.0.0.1'`. That local mapping made the loopback smoke test possible. It does not establish that deployment DNS or UDP reachability works.
+This used the CDP-controlled CTAP 2.1 virtual authenticator with PRF support. The local app configuration used `localhost` as its machine DNS suffix. The runner's system resolver did not resolve `workstation.localhost`; Chromium needed `--host-resolver-rules='MAP workstation.localhost 127.0.0.1'`. That local mapping made the loopback smoke test possible. It does not establish that deployment DNS or UDP reachability works.
 
 The installed `chrome-devtools` 1.12.0 CLI returned after `start`, and `status` reported no running daemon in this runner. The page action was exercised through a direct CDP WebSocket connection instead. The runner had no physical authenticator or deployed network to test.
 

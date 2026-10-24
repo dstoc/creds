@@ -117,7 +117,7 @@ pub async fn receive_key(
         revision,
         operation,
     });
-    let (identity, certificate_pin, endpoint_hostname) = create_identity(config)?;
+    let (identity, certificate_pin) = create_identity(config)?;
     let server_config = ServerConfig::builder()
         .with_bind_address(config.listen_addr)
         .with_identity(identity)
@@ -136,7 +136,10 @@ pub async fn receive_key(
     let qr_image = qr_code.render::<Dense1x2>().quiet_zone(true).build();
 
     eprintln!("Open this URL on the approval device: {handoff_url}");
-    eprintln!("Or scan this QR code (destination {endpoint_hostname}:{port}):\n{qr_image}");
+    eprintln!(
+        "Or scan this QR code (machine label {}, UDP port {port}; the approval app adds its configured DNS suffix):\n{qr_image}",
+        config.hostname
+    );
     eprintln!("Waiting for one WebAuthn-approved response (two-minute deadline).");
 
     if *cancellation.borrow() {
@@ -504,10 +507,10 @@ impl Drop for ActiveChallengeGuard {
     }
 }
 
-fn create_identity(config: &ValidatedConfig) -> Result<(Identity, String, String)> {
-    let endpoint_hostname = format!("{}.{}", config.hostname, config.rp_id);
+fn create_identity(config: &ValidatedConfig) -> Result<(Identity, String)> {
+    let certificate_name = format!("{}.{}", config.hostname, config.rp_id);
     let signing_key = KeyPair::generate()?;
-    let mut certificate_params = CertificateParams::new(vec![endpoint_hostname.clone()])?;
+    let mut certificate_params = CertificateParams::new(vec![certificate_name])?;
     let (not_before, not_after) = certificate_validity(OffsetDateTime::now_utc());
     certificate_params.not_before = not_before;
     certificate_params.not_after = not_after;
@@ -518,7 +521,7 @@ fn create_identity(config: &ValidatedConfig) -> Result<(Identity, String, String
         tls::CertificateChain::single(tls::Certificate::from_der(certificate_der)?),
         tls::PrivateKey::from_der_pkcs8(signing_key.serialize_der()),
     );
-    Ok((identity, pin, endpoint_hostname))
+    Ok((identity, pin))
 }
 
 fn build_handoff_url(
