@@ -18,6 +18,8 @@ Run date: 2026-10-24.
 
 `./scripts/test.sh` runs the browser-module tests under Node.js. `main.test.mjs` uses a lightweight fake DOM and mocked handoff sessions to cover request display, cancel during connection and WebAuthn, session loss, and the one-approval send path. `transport.test.mjs` uses a mocked WebTransport implementation for framing, pin configuration, extra data, and failure handling. `webauthn.test.mjs` supplies mocked WebAuthn responses for PRF and assertion construction. These tests check application control flow; they do not stand in for a browser or authenticator.
 
+The Rust `command_flow` integration test starts the compiled CLI and connects a Rust WebTransport client to the actual loopback listener. It covers file and stdin/stdout flows, replacement snapshots, rejected assertions, mismatched keys, cancellation, and preservation of existing ciphertext and output files. Its deterministic signing key and generated assertion are protocol fixtures; this test does not exercise browser WebAuthn or a passkey device.
+
 The Chromium experiments below exercise WebTransport, WebAuthn, PRF, and public-key export through Chromium's real APIs with a CDP-controlled virtual CTAP 2.1 authenticator. They remain loopback tests with a virtual authenticator. Physical passkeys, provider-specific PRF behavior, cross-device use, deployment DNS, and deployed UDP reachability remain manual compatibility checks.
 
 ### WebTransport and certificate hash
