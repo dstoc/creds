@@ -94,27 +94,17 @@ jobs:
               ;;
           esac
 
-      - name: Require a workflow token that triggers CI
-        if: ${{ github.event_name == 'push' || inputs.operation == 'first-release' }}
-        env:
-          RELEASE_PLEASE_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN }}
-        run: |
-          test -n "$RELEASE_PLEASE_TOKEN" || {
-            echo "Configure the RELEASE_PLEASE_TOKEN secret; GITHUB_TOKEN does not trigger release PR checks." >&2
-            exit 1
-          }
-
       - name: Create first release PR
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.operation == 'first-release' }}
         env:
-          RELEASE_PLEASE_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
           RELEASE_AS: ${{ inputs.release_as }}
         run: |
           set -euo pipefail
           npm exec --yes --package=release-please@17.3.0 -- release-please release-pr \
             --repo-url="$GITHUB_REPOSITORY" \
             --target-branch=main \
-            --token="$RELEASE_PLEASE_TOKEN" \
+            --token="$GH_TOKEN" \
             --config-file=release-please-config.json \
             --manifest-file=.release-please-manifest.json \
             --release-as="$RELEASE_AS"
@@ -123,7 +113,7 @@ jobs:
         id: release
         if: ${{ github.event_name == 'push' }}
         with:
-          token: ${{ secrets.RELEASE_PLEASE_TOKEN }}
+          token: ${{ github.token }}
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
 

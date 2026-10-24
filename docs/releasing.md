@@ -44,9 +44,13 @@ The archive does not configure HTTP response headers. Serve `.mjs` files with `t
 
 ## Configure GitHub Actions
 
-Create the repository secret `RELEASE_PLEASE_TOKEN`. Use a fine-grained personal access token with access to this repository and permission to read and write contents, pull requests, and issues. Release Please needs write access to update the release PR, create the tag and draft, and apply its release labels. Set an expiration and rotate the secret before it expires. A token other than the built-in `GITHUB_TOKEN` is required because events created with `GITHUB_TOKEN` do not start other workflow runs. Without a different token, the generated release PR will not receive the existing `test` check.
+The release workflow uses its built-in `GITHUB_TOKEN`. Its `release-please` job has write permission for contents, issues, and pull requests. In **Settings → Actions → General**, allow GitHub Actions to create pull requests.
 
-In **Settings → Actions → General**, allow GitHub Actions to create pull requests. Keep the existing required check named `test`; the test workflow runs `./scripts/test.sh` for pull requests and includes the release packaging and publication-gate tests.
+GitHub [creates approval-required `pull_request` runs](https://docs.github.com/en/actions/concepts/security/github_token#when-github_token-triggers-workflow-runs) for `opened`, `synchronize`, and `reopened` events when a workflow using `GITHUB_TOKEN` creates or updates a pull request. After Release Please creates or updates its PR, review the PR and select **Approve workflows to run** in the PR's merge status box. A user with write access can approve these runs. This starts the test workflow on the eligible `pull_request` event, so its `test` check can satisfy the required branch ruleset check.
+
+The test workflow also supports **Actions → test → Run workflow** on the PR's head branch for a standalone manual run. A [`workflow_dispatch` check](https://docs.github.com/en/pull-requests/how-tos/merge-and-close-pull-requests/troubleshooting-required-status-checks#checks-from-some-workflow-jobs-are-not-evaluated) does not appear in the PR checks section and does not satisfy the required check, even when it passes on the current head. Use the approval step above for the required check.
+
+After the approval-required run completes, confirm that `test` passed for the PR's current head SHA and that the PR merge status box recognizes the required check. Repeat the approval and verification after each Release Please PR update; a successful check on an earlier head does not verify a newer one. Keep the required branch protection check named `test`.
 
 ## First release
 
