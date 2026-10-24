@@ -38,13 +38,26 @@ export async function testPinnedEcho(endpointValue, hashValue) {
     await writer.close();
 
     const reader = stream.readable.getReader();
-    const { value, done } = await reader.read();
-    if (done || !value) throw new Error("The Rust listener closed without an echo.");
-    const matches = value.byteLength === PROBE_MESSAGE.byteLength &&
-      PROBE_MESSAGE.every((byte, index) => value[index] === byte);
+    const echo = new Uint8Array(PROBE_MESSAGE.byteLength);
+    let offset = 0;
+    try {
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        if (value.byteLength > echo.byteLength - offset) {
+          throw new Error("The Rust listener returned extra probe data.");
+        }
+        echo.set(value, offset);
+        offset += value.byteLength;
+      }
+    } finally {
+      reader.releaseLock();
+    }
+    if (offset !== PROBE_MESSAGE.byteLength) {
+      throw new Error("The Rust listener returned a truncated echo.");
+    }
+    const matches = PROBE_MESSAGE.every((byte, index) => echo[index] === byte);
     if (!matches) throw new Error("The Rust listener returned an unexpected echo.");
-    const end = await reader.read();
-    if (!end.done) throw new Error("The Rust listener returned extra probe data.");
     transport.close();
     return { matchedPin: true, echoMatched: true };
   } catch (error) {

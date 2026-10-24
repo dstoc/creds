@@ -7,5 +7,7 @@ cargo test --locked --all-targets
 node --check scripts/virtual-authenticator.mjs
 node --check web/js/main.mjs
 node --check web/js/transport.mjs
+node --check web/js/transport.test.mjs
 node --check web/js/webauthn.mjs
 node --test web/js/encoding.test.mjs
+node --test web/js/transport.test.mjs
