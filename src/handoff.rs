@@ -1,6 +1,7 @@
 use std::{
     collections::HashSet,
     error::Error,
+    future::Future,
     io,
     sync::{
         Arc, Mutex,
@@ -239,20 +240,8 @@ async fn handle_connection(
     state: Arc<SessionState>,
 ) -> Result<()> {
     let (mut send, mut receive) = accept_one_bidirectional_stream(connection).await?;
-    let monitor_connection = connection.clone();
-    let stream_monitor = tokio::spawn(async move {
-        tokio::select! {
-            _ = monitor_connection.accept_bi() => {
-                monitor_connection.close(VarInt::from_u32(3), b"additional stream rejected");
-            }
-            _ = monitor_connection.accept_uni() => {
-                monitor_connection.close(VarInt::from_u32(3), b"additional stream rejected");
-            }
-            _ = monitor_connection.closed() => {}
-        }
-    });
-
-    let protocol_result = async {
+    let stream_rejection = reject_additional_streams(connection.clone());
+    let verified_response = async {
         let hello_bytes = read_frame(&mut receive).await?;
         validate_hello(&hello_bytes, &state.request.request_id)?;
         let challenge = fresh_challenge(&state.request.request_id, &state.active_challenges)?;
@@ -284,23 +273,58 @@ async fn handle_connection(
             &state.rp_id,
             &state.public_key,
         )?;
-        state
-            .operation_consumed
-            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-            .map_err(|_| {
-                io::Error::new(io::ErrorKind::AlreadyExists, "operation already consumed")
-            })?;
-        state
-            .key_sender
-            .send(key)
-            .await
-            .map_err(|_| io::Error::other("handoff listener stopped before approval"))?;
-        Ok::<(), BoxError>(())
-    }
-    .await;
+        Ok::<Zeroizing<[u8; 32]>, BoxError>(key)
+    };
 
-    stream_monitor.abort();
-    protocol_result
+    arbitrate_and_consume(
+        stream_rejection,
+        verified_response,
+        &state.operation_consumed,
+        &state.key_sender,
+    )
+    .await
+}
+
+async fn reject_additional_streams(connection: wtransport::Connection) -> io::Error {
+    tokio::select! {
+        stream = connection.accept_bi() => match stream {
+            Ok(_) => {
+                connection.close(VarInt::from_u32(3), b"additional stream rejected");
+                io::Error::new(io::ErrorKind::InvalidData, "additional bidirectional stream rejected")
+            }
+            Err(_) => std::future::pending().await,
+        },
+        stream = connection.accept_uni() => match stream {
+            Ok(_) => {
+                connection.close(VarInt::from_u32(3), b"additional stream rejected");
+                io::Error::new(io::ErrorKind::InvalidData, "additional unidirectional stream rejected")
+            }
+            Err(_) => std::future::pending().await,
+        },
+    }
+}
+
+async fn arbitrate_and_consume(
+    stream_rejection: impl Future<Output = io::Error>,
+    verified_response: impl Future<Output = Result<Zeroizing<[u8; 32]>>>,
+    operation_consumed: &AtomicBool,
+    key_sender: &mpsc::Sender<Zeroizing<[u8; 32]>>,
+) -> Result<()> {
+    tokio::select! {
+        biased;
+        error = stream_rejection => Err(error.into()),
+        response = verified_response => {
+            let key = response?;
+            operation_consumed
+                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                .map_err(|_| io::Error::new(io::ErrorKind::AlreadyExists, "operation already consumed"))?;
+            key_sender
+                .send(key)
+                .await
+                .map_err(|_| io::Error::other("handoff listener stopped before approval"))?;
+            Ok(())
+        }
+    }
 }
 
 async fn accept_one_bidirectional_stream(
@@ -638,6 +662,23 @@ mod tests {
             1
         );
         assert!(consumed.load(Ordering::Acquire));
+    }
+
+    #[tokio::test]
+    async fn additional_stream_rejection_wins_before_consuming_a_verified_response() {
+        let consumed = AtomicBool::new(false);
+        let (sender, mut receiver) = mpsc::channel(1);
+        let stream_rejection =
+            async { io::Error::new(io::ErrorKind::InvalidData, "additional stream rejected") };
+        // The valid response is already verified and ready at the session decision point.
+        let verified_response = async { Ok(Zeroizing::new([0x6d; 32])) };
+
+        let result =
+            arbitrate_and_consume(stream_rejection, verified_response, &consumed, &sender).await;
+
+        assert!(result.is_err());
+        assert!(!consumed.load(Ordering::Acquire));
+        assert!(receiver.try_recv().is_err());
     }
 
     #[test]

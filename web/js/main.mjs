@@ -96,6 +96,7 @@ async function startApprovalFlow() {
   const fragment = location.hash;
   history.replaceState(null, "", `${location.pathname}${location.search}`);
   approvalPanel.hidden = false;
+  approveButton.disabled = true;
   probeTools.hidden = true;
   document.querySelector("#eyebrow").textContent = "creds · request approval";
   document.querySelector("#page-title").textContent = "Approve a creds request";
@@ -126,6 +127,7 @@ async function startApprovalFlow() {
     document.querySelector("#request-revision").textContent = String(request.revision);
     document.querySelector("#request-operation").textContent = request.operation;
     show("Connected to the pinned CLI. Check the request details, then select Approve and verify.");
+    approveButton.disabled = false;
     approvalSession.failed.then((error) => {
       if (approvalController) approvalController.abort();
       approveButton.disabled = true;
