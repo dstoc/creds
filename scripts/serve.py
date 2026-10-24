@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Serve the local browser probe on loopback with its restrictive response headers."""
+"""Serve the local setup and compatibility page on loopback with restrictive headers."""
 
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer

@@ -58,6 +58,7 @@ input {
 input:focus-visible, button:focus-visible { outline: 3px solid #83c8b1; outline-offset: 2px; }
 code { padding: 0.1em 0.32em; border-radius: 4px; background: #edf3f0; font-size: 0.9em; }
 .actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 18px; }
+.actions input { flex: 1 1 360px; min-width: 0; }
 button {
   min-height: 44px;
   padding: 10px 15px;
