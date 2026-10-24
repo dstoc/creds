@@ -34,14 +34,39 @@ fn invalid(message: impl Into<String>) -> EnvelopeError {
     EnvelopeError(message.into())
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
+/// A validated version-1 encryption envelope.
+///
+/// Use [`Envelope::parse`] to read serialized data. Direct Serde deserialization is not
+/// available because it would bypass the serialized size limit and envelope validation.
+///
+/// ```compile_fail
+/// let _: creds::envelope::Envelope = serde_json::from_str("{}").unwrap();
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Envelope {
+    name: String,
+    revision: u32,
+    nonce: String,
+    ciphertext: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EnvelopeWire {
     version: u8,
     name: String,
     revision: u32,
     nonce: String,
     ciphertext: String,
+}
+
+#[derive(Serialize)]
+struct EncodedEnvelope<'a> {
+    version: u8,
+    name: &'a str,
+    revision: u32,
+    nonce: &'a str,
+    ciphertext: &'a str,
 }
 
 impl Envelope {
@@ -93,7 +118,6 @@ impl Envelope {
             )
             .map_err(|_| invalid("AES-256-GCM encryption failed"))?;
         Ok(Self {
-            version: 1,
             name: name.to_owned(),
             revision,
             nonce: URL_SAFE_NO_PAD.encode(nonce),
@@ -139,7 +163,14 @@ impl Envelope {
     }
 
     pub fn to_json(&self) -> Result<Vec<u8>, EnvelopeError> {
-        let bytes = serde_json::to_vec(self)
+        let wire = EncodedEnvelope {
+            version: 1,
+            name: &self.name,
+            revision: self.revision,
+            nonce: &self.nonce,
+            ciphertext: &self.ciphertext,
+        };
+        let bytes = serde_json::to_vec(&wire)
             .map_err(|error| invalid(format!("could not serialize envelope: {error}")))?;
         if bytes.len() > MAX_ENVELOPE_BYTES {
             return Err(invalid("serialized envelope exceeds the 128 KiB limit"));
@@ -151,18 +182,18 @@ impl Envelope {
         if bytes.is_empty() || bytes.len() > MAX_ENVELOPE_BYTES {
             return Err(invalid("envelope is empty or exceeds the 128 KiB limit"));
         }
-        let envelope: Self = serde_json::from_slice(bytes)
+        let wire: EnvelopeWire = serde_json::from_slice(bytes)
             .map_err(|error| invalid(format!("malformed envelope JSON: {error}")))?;
-        if envelope.version != 1 {
+        if wire.version != 1 {
             return Err(invalid("envelope version must be 1"));
         }
-        validate_name(&envelope.name).map_err(|error| invalid(error.to_string()))?;
-        validate_revision(envelope.revision).map_err(|error| invalid(error.to_string()))?;
-        let nonce = decode_canonical("nonce", &envelope.nonce)?;
+        validate_name(&wire.name).map_err(|error| invalid(error.to_string()))?;
+        validate_revision(wire.revision).map_err(|error| invalid(error.to_string()))?;
+        let nonce = decode_canonical("nonce", &wire.nonce)?;
         if nonce.len() != NONCE_BYTES {
             return Err(invalid("nonce must decode to exactly 12 bytes"));
         }
-        let ciphertext = decode_canonical("ciphertext", &envelope.ciphertext)?;
+        let ciphertext = decode_canonical("ciphertext", &wire.ciphertext)?;
         if ciphertext.len() < TAG_BYTES {
             return Err(invalid(
                 "ciphertext must include a 16-byte authentication tag",
@@ -171,7 +202,12 @@ impl Envelope {
         if ciphertext.len() > MAX_PLAINTEXT_BYTES + TAG_BYTES {
             return Err(invalid("ciphertext exceeds the plaintext size limit"));
         }
-        Ok(envelope)
+        Ok(Self {
+            name: wire.name,
+            revision: wire.revision,
+            nonce: wire.nonce,
+            ciphertext: wire.ciphertext,
+        })
     }
 }
 
@@ -260,7 +296,6 @@ mod tests {
         let out_of_range_revision = good.replace("\"revision\":1", "\"revision\":4294967296");
         let fractional_revision = good.replace("\"revision\":1", "\"revision\":1.5");
         let negative_revision = good.replace("\"revision\":1", "\"revision\":-1");
-        let bad_version = good.replace("\"version\":1", "\"version\":2");
         let padded = good.replace("\"nonce\":\"", "\"nonce\":\"=");
         let invalid_encoding = good.replace(&valid_envelope.nonce, "not+base64");
         let short_ciphertext = good.replace(
@@ -275,7 +310,6 @@ mod tests {
             out_of_range_revision,
             fractional_revision,
             negative_revision,
-            bad_version,
             padded,
             invalid_encoding,
             short_ciphertext,
@@ -287,5 +321,14 @@ mod tests {
         }
         assert!(Envelope::parse(&vec![b' '; MAX_ENVELOPE_BYTES + 1]).is_err());
         assert!(Envelope::encrypt("secret", 1, &vec![0; MAX_PLAINTEXT_BYTES + 1], &key()).is_err());
+    }
+
+    #[test]
+    fn parser_rejects_unsupported_versions() {
+        let envelope = Envelope::encrypt("secret", 1, b"x", &key()).unwrap();
+        let good = String::from_utf8(envelope.to_json().unwrap()).unwrap();
+        let unsupported = good.replace("\"version\":1", "\"version\":2");
+
+        assert!(Envelope::parse(unsupported.as_bytes()).is_err());
     }
 }
