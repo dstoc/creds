@@ -51,11 +51,15 @@ export function associatedData(name, revision) {
 export async function deriveEncryptionKey(prfOutput, cryptoProvider = globalThis.crypto) {
   const bytes = new Uint8Array(prfOutput);
   if (bytes.length !== 32) throw new TypeError("WebAuthn PRF output must be exactly 32 bytes.");
-  const keyMaterial = await cryptoProvider.subtle.importKey("raw", bytes, "HKDF", false, ["deriveBits"]);
-  const derived = await cryptoProvider.subtle.deriveBits(
-    { name: "HKDF", hash: "SHA-256", salt: new Uint8Array(32), info: HKDF_INFO },
-    keyMaterial,
-    256,
-  );
-  return new Uint8Array(derived);
+  try {
+    const keyMaterial = await cryptoProvider.subtle.importKey("raw", bytes, "HKDF", false, ["deriveBits"]);
+    const derived = await cryptoProvider.subtle.deriveBits(
+      { name: "HKDF", hash: "SHA-256", salt: new Uint8Array(32), info: HKDF_INFO },
+      keyMaterial,
+      256,
+    );
+    return new Uint8Array(derived);
+  } finally {
+    bytes.fill(0);
+  }
 }

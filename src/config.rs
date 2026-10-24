@@ -32,6 +32,7 @@ pub struct ConfigValues {
 #[derive(Debug)]
 pub struct ValidatedConfig {
     pub config_path: PathBuf,
+    pub app_url: String,
     pub app_origin: String,
     pub rp_id: String,
     pub hostname: String,
@@ -205,7 +206,7 @@ fn validate_values(
     require_storage_directory: bool,
 ) -> Result<ValidatedConfig> {
     validate_hostname_label(&values.hostname)?;
-    let (_url, app_origin, rp_id) = validate_app_url(&values.app_url)?;
+    let (app_url, app_origin, rp_id) = validate_app_url(&values.app_url)?;
     let storage_dir = resolve_storage(&values.storage_dir, config_path)?;
     let listen_addr = values
         .listen_addr
@@ -240,6 +241,7 @@ fn validate_values(
     }
     Ok(ValidatedConfig {
         config_path: config_path.to_path_buf(),
+        app_url: app_url.to_string(),
         app_origin,
         rp_id,
         hostname: values.hostname,

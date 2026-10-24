@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
-"""Serve the local setup and compatibility page on loopback with restrictive headers."""
+"""Serve the local creds page on loopback with restrictive headers."""
 
 from functools import partial
+import argparse
+import ssl
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -17,7 +19,7 @@ class ProbeHandler(SimpleHTTPRequestHandler):
             "Content-Security-Policy",
             "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; "
             "img-src 'self' data:; script-src 'self'; style-src 'self'; "
-            "connect-src 'self' https://127.0.0.1:*; object-src 'none'",
+            "connect-src 'self' https://*.localhost:* https://*.keys.example:* https://127.0.0.1:*; object-src 'none'",
         )
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Referrer-Policy", "no-referrer")
@@ -25,9 +27,22 @@ class ProbeHandler(SimpleHTTPRequestHandler):
 
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--port", type=int, default=8000)
+    parser.add_argument("--tls-cert", type=Path)
+    parser.add_argument("--tls-key", type=Path)
+    arguments = parser.parse_args()
+    if (arguments.tls_cert is None) != (arguments.tls_key is None):
+        parser.error("--tls-cert and --tls-key must be used together")
+
     handler = partial(ProbeHandler, directory=str(ROOT))
-    with ThreadingHTTPServer(("127.0.0.1", 8000), handler) as server:
-        print("Serving the local probe at http://localhost:8000 (loopback only). Ctrl-C stops it.")
+    with ThreadingHTTPServer(("127.0.0.1", arguments.port), handler) as server:
+        scheme = "https" if arguments.tls_cert else "http"
+        if arguments.tls_cert:
+            tls_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            tls_context.load_cert_chain(arguments.tls_cert, arguments.tls_key)
+            server.socket = tls_context.wrap_socket(server.socket, server_side=True)
+        print(f"Serving the local creds page at {scheme}://localhost:{arguments.port} (loopback only). Ctrl-C stops it.")
         server.serve_forever()
 
 

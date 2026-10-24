@@ -1,4 +1,5 @@
 import { encodeBase64Url } from "./encoding.mjs";
+import { deriveEncryptionKey, prfInput } from "./envelope.mjs";
 
 const PRF_INPUT = new TextEncoder().encode("creds/prf/local-probe/v1");
 const SETUP_PRF_INPUT = new TextEncoder().encode("creds/passkey-setup/v1");
@@ -103,6 +104,56 @@ export async function createPasskey(label) {
     publicKey: encodeBase64Url(new Uint8Array(publicKeyDer)),
     publicKeyAlgorithm: "ES256 (-7)",
     prfSupported: true,
+  };
+}
+
+export async function createApprovalAssertion(request, signal) {
+  if (!window.isSecureContext) throw new Error("WebAuthn requires a secure context.");
+  if (!navigator.credentials?.get || !window.PublicKeyCredential) {
+    throw new Error("WebAuthn is unavailable in this browser context.");
+  }
+  if (signal?.aborted) throw new DOMException("Approval was cancelled.", "AbortError");
+
+  const credential = await navigator.credentials.get({
+    publicKey: {
+      challenge: request.challenge,
+      timeout: 120_000,
+      rpId: location.hostname,
+      userVerification: "required",
+      extensions: { prf: { eval: { first: prfInput(request.name, request.revision) } } },
+    },
+    signal,
+  });
+  if (!(credential instanceof PublicKeyCredential) || !credential.response) {
+    throw new Error("The browser did not return a WebAuthn assertion.");
+  }
+
+  const prfResult = credential.getClientExtensionResults?.().prf?.results?.first;
+  if (!(prfResult instanceof ArrayBuffer) || prfResult.byteLength !== 32) {
+    throw new Error("The passkey did not return a 32-byte PRF result.");
+  }
+  const prfOutput = new Uint8Array(prfResult);
+  let key;
+  try {
+    if (signal?.aborted) throw new DOMException("Approval was cancelled.", "AbortError");
+    key = await deriveEncryptionKey(prfOutput);
+  } finally {
+    prfOutput.fill(0);
+  }
+
+  if (signal?.aborted) {
+    key.fill(0);
+    throw new DOMException("Approval was cancelled.", "AbortError");
+  }
+  const { clientDataJSON, authenticatorData, signature } = credential.response;
+  const fields = [clientDataJSON, authenticatorData, signature];
+  if (fields.some((field) => !(field instanceof ArrayBuffer) || field.byteLength === 0 || field.byteLength > 4096)) {
+    key.fill(0);
+    throw new Error("The WebAuthn assertion contains an empty or oversized field.");
+  }
+  return {
+    key,
+    assertion: { clientDataJSON, authenticatorData, signature },
   };
 }
 

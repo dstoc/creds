@@ -8,6 +8,7 @@
 }
 
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 
 body {
   margin: 0;
@@ -59,6 +60,10 @@ input:focus-visible, button:focus-visible { outline: 3px solid #83c8b1; outline-
 code { padding: 0.1em 0.32em; border-radius: 4px; background: #edf3f0; font-size: 0.9em; }
 .actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 18px; }
 .actions input { flex: 1 1 360px; min-width: 0; }
+.request-details { margin: 20px 0; }
+.request-details div { display: grid; grid-template-columns: minmax(90px, 150px) 1fr; gap: 12px; padding: 9px 0; border-bottom: 1px solid #e4ebe8; }
+.request-details dt { color: #526169; font-weight: 650; }
+.request-details dd { margin: 0; overflow-wrap: anywhere; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
 button {
   min-height: 44px;
   padding: 10px 15px;
