@@ -101,8 +101,8 @@ The automated and manual checks map to the proposal as follows:
 | Proposal contract | Verification |
 | --- | --- |
 | Stable v1 PRF, HKDF, AAD, and envelope bytes | Shared fixture in test-vectors/envelope-v1.json; Rust tests in src/protocol.rs; Node tests in web/js/envelope.test.mjs |
-| Bounded parsing, malformed fields, tampering, signatures, origin, RP ID, UP/UV, and CBOR extensions | Rust tests in src/envelope.rs and src/assertion.rs; browser request, frame, DNS suffix, and QR override tests in web/js/transport.test.mjs |
-| Pinned handoff, URL fields, per-connection challenges, one valid response, replay and duplicate rejection | Rust tests in src/handoff.rs and tests/command_flow.rs, including a loopback CLI connection under a machine suffix different from the app RP ID; Node pin and response tests in web/js/transport.test.mjs |
+| Bounded parsing, malformed fields, tampering, signatures, origin, RP ID, UP/UV, and CBOR extensions | Rust tests in src/envelope.rs and src/assertion.rs; browser request JSON/schema, frame, DNS suffix, and QR override tests in web/js/transport.test.mjs |
+| Pinned handoff, URL fields, per-connection challenges, one valid response, and replay rejection | Rust tests in src/handoff.rs and tests/command_flow.rs, including a loopback CLI connection under a machine suffix different from the app RP ID; Node pin and response tests in web/js/transport.test.mjs. Rust rejects duplicate fields in untrusted browser messages. Browser request parsing uses JSON.parse semantics for trusted CLI messages. |
 | Approval cancellation, connection loss, and safe request display | Browser tests in web/js/main.test.mjs and web/js/webauthn.test.mjs |
 | Concurrent writer exclusion, replacement snapshots, revision overflow, tampered files, and publication failures | Rust tests in src/storage.rs; the CLI snapshot race in tests/command_flow.rs |
 | Config parsing, explicit paths, storage checks, and read-only check behavior | Rust tests in src/config.rs |
