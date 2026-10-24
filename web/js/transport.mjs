@@ -17,10 +17,9 @@ export function parseHandoffFragment(fragment, pageLocation = globalThis.locatio
     configuredDnsSuffix.length > 253 ||
     configuredDnsSuffix !== configuredDnsSuffix.toLowerCase() ||
     !configuredDnsSuffix.split(".").every((label) => /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/u.test(label)) ||
-    /^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$/u.test(configuredDnsSuffix) ||
-    pageLocation.hostname !== configuredDnsSuffix
+    /^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$/u.test(configuredDnsSuffix)
   ) {
-    throw new TypeError("The approval page hostname must match its configured DNS suffix.");
+    throw new TypeError("The configured machine DNS suffix is invalid.");
   }
   const params = new URLSearchParams(fragment.startsWith("#") ? fragment.slice(1) : fragment);
   const allowed = new Set(["v", "host", "port", "cert", "request"]);
@@ -37,6 +36,8 @@ export function parseHandoffFragment(fragment, pageLocation = globalThis.locatio
   if (!/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$/u.test(host)) {
     throw new TypeError("The handoff host must be one DNS label.");
   }
+  const fullHostname = `${host}.${configuredDnsSuffix}`;
+  if (fullHostname.length > 253) throw new TypeError("The handoff hostname is too long.");
   if (!/^[1-9][0-9]{0,4}$/u.test(portText)) throw new TypeError("The handoff port is invalid.");
   const port = Number(portText);
   if (port > 65535) throw new TypeError("The handoff port must be from 1 through 65535.");
@@ -46,13 +47,13 @@ export function parseHandoffFragment(fragment, pageLocation = globalThis.locatio
   if (requestBytes.byteLength !== 32) throw new TypeError("The request identifier must be 32 bytes.");
   return Object.freeze({
     host,
-    fullHostname: `${host}.${configuredDnsSuffix}`,
+    fullHostname,
     port,
     certificateHash,
     certificatePin,
     requestId,
     requestBytes,
-    endpoint: `https://${host}.${configuredDnsSuffix}:${port}/key`,
+    endpoint: `https://${fullHostname}:${port}/key`,
   });
 }
 

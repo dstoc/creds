@@ -46,7 +46,9 @@ class StaticServerTests(unittest.TestCase):
         self.assertNotIn("'unsafe-eval'", csp)
         self.assertEqual(response.headers["X-Content-Type-Options"], "nosniff")
         self.assertEqual(response.headers["Referrer-Policy"], "no-referrer")
-        self.assertIn('name="creds-dns-suffix"', page)
+        self.assertIn('<meta name="creds-dns-suffix" content="tailnet.example.net">', page)
+        self.assertIn("https://*.tailnet.example.net:*", page)
+        self.assertIn("https://*.tailnet.example.net:*", csp)
 
         with urlopen(f"{self.base_url}/js/main.mjs") as module:
             self.assertEqual(module.status, 200)

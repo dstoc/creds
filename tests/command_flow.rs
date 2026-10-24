@@ -29,6 +29,7 @@ use wtransport::{
 
 const APP_ORIGIN: &str = "https://keys.example";
 const RP_ID: &str = "keys.example";
+const MACHINE_DNS_SUFFIX: &str = "tailnet.example.net";
 const MAX_STARTUP: Duration = Duration::from_secs(15);
 const MAX_COMMAND: Duration = Duration::from_secs(20);
 
@@ -356,7 +357,7 @@ async fn connect_approval(url: &Url) -> Result<ApprovalSession, Box<dyn Error>> 
             .ok_or("handoff certificate pin is missing")?,
     )?;
     let pin: [u8; 32] = pin_bytes.try_into().map_err(|_| "invalid pin length")?;
-    let endpoint_host = format!("{host}.{RP_ID}");
+    let endpoint_host = format!("{host}.{MACHINE_DNS_SUFFIX}");
 
     let mut client_config = ClientConfig::builder()
         .with_bind_default()

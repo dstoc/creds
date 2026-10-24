@@ -88,14 +88,14 @@ const requestBody = new TextEncoder().encode(JSON.stringify({
   challenge: encodeBase64Url(challengeBytes),
 }));
 
-test("handoff fragment validates the version, DNS label, port, pin, and request", () => {
+test("handoff fragment combines the machine label with the configured suffix, independent of app hostname", () => {
   const handoff = parseHandoffFragment(
     `#v=1&host=workstation&port=8443&cert=${pinText}&request=${requestText}`,
-    { protocol: "https:", hostname: "keys.example" },
-    "keys.example",
+    { protocol: "https:", hostname: "approval.example.com" },
+    "tailnet.example.net",
   );
-  assert.equal(handoff.endpoint, "https://workstation.keys.example:8443/key");
-  assert.equal(handoff.fullHostname, "workstation.keys.example");
+  assert.equal(handoff.endpoint, "https://workstation.tailnet.example.net:8443/key");
+  assert.equal(handoff.fullHostname, "workstation.tailnet.example.net");
   assert.deepEqual(handoff.certificatePin, decodeBase64Url(pinText));
 
   for (const fragment of [
@@ -105,11 +105,14 @@ test("handoff fragment validates the version, DNS label, port, pin, and request"
     `#v=1&host=workstation&port=65536&cert=${pinText}&request=${requestText}`,
     `#v=1&host=workstation&port=8443&cert=${pinText}&cert=${pinText}&request=${requestText}`,
     `#v=1&host=workstation&port=8443&cert=${pinText}&request=${requestText}&url=https://evil.example`,
+    `#v=1&host=workstation&port=8443&cert=${pinText}&request=${requestText}&destination=https://evil.example`,
+    `#v=1&host=workstation&port=8443&cert=${pinText}&request=${requestText}&suffix=evil.example`,
+    `#v=1&host=workstation&port=8443&cert=${pinText}&request=${requestText}&path=/evil`,
   ]) {
     assert.throws(() => parseHandoffFragment(
       fragment,
-      { protocol: "https:", hostname: "keys.example" },
-      "keys.example",
+      { protocol: "https:", hostname: "approval.example.com" },
+      "tailnet.example.net",
     ));
   }
   assert.throws(() => parseHandoffFragment(
@@ -119,14 +122,35 @@ test("handoff fragment validates the version, DNS label, port, pin, and request"
   ), /HTTPS/u);
   assert.throws(() => parseHandoffFragment(
     `#v=1&host=workstation&port=8443&cert=${pinText}&request=${requestText}`,
-    { protocol: "https:", hostname: "keys.example" },
-    "other.example",
-  ), /configured DNS suffix/u);
-  assert.throws(() => parseHandoffFragment(
-    `#v=1&host=workstation&port=8443&cert=${pinText}&request=${requestText}`,
-    { protocol: "https:", hostname: "127.0.0.1" },
+    { protocol: "https:", hostname: "approval.example.com" },
     "127.0.0.1",
-  ), /configured DNS suffix/u);
+  ), /configured machine DNS suffix/u);
+
+  for (const suffix of [
+    "",
+    ".tailnet.example",
+    "tailnet..example",
+    "tailnet.example.",
+    "Tailnet.example",
+    "-tailnet.example",
+    "tailnet-.example",
+    "tailnet.example/path",
+    "tailnet.example:443",
+    "123.456.789.012",
+    `${"a".repeat(63)}.${"b".repeat(63)}.${"c".repeat(63)}.${"d".repeat(63)}`,
+  ]) {
+    assert.throws(() => parseHandoffFragment(
+      `#v=1&host=workstation&port=8443&cert=${pinText}&request=${requestText}`,
+      { protocol: "https:", hostname: "approval.example.com" },
+      suffix,
+    ), `accepted malformed machine DNS suffix ${JSON.stringify(suffix)}`);
+  }
+
+  assert.throws(() => parseHandoffFragment(
+    `#v=1&host=${"a".repeat(63)}&port=8443&cert=${pinText}&request=${requestText}`,
+    { protocol: "https:", hostname: "approval.example.com" },
+    `${"b".repeat(63)}.${"c".repeat(63)}.${"d".repeat(63)}.e`,
+  ), /hostname is too long/u);
 });
 
 test("request parser rejects duplicate, unknown, cross-purpose, and malformed fields", () => {
@@ -156,11 +180,13 @@ test("length-prefixed frames use a four-byte unsigned big-endian size and enforc
 test("approval opens one stream with the exact certificate pin and handles split request frames", async () => {
   const originalDescriptor = Object.getOwnPropertyDescriptor(globalThis, "WebTransport");
   const requestFrame = encodeFrame(requestBody);
+  let endpoint;
   let options;
   let readableController;
   const writes = [];
   class FakeWebTransport {
-    constructor(_url, transportOptions) {
+    constructor(url, transportOptions) {
+      endpoint = url;
       options = transportOptions;
       this.ready = Promise.resolve();
       this.closed = new Promise(() => {});
@@ -189,10 +215,11 @@ test("approval opens one stream with the exact certificate pin and handles split
   try {
     const handoff = parseHandoffFragment(
       `#v=1&host=workstation&port=8443&cert=${pinText}&request=${requestText}`,
-      { protocol: "https:", hostname: "keys.example" },
-      "keys.example",
+      { protocol: "https:", hostname: "approval.example.com" },
+      "tailnet.example.net",
     );
     const session = await connectHandoff(handoff);
+    assert.equal(endpoint, "https://workstation.tailnet.example.net:8443/key");
     assert.equal(session.request.name, "secret-x");
     assert.deepEqual(options.serverCertificateHashes, [{ algorithm: "sha-256", value: handoff.certificatePin }]);
     const key = new Uint8Array(32).fill(0x7a);

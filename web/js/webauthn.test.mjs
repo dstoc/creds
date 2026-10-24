@@ -62,7 +62,7 @@ function installWebAuthn({
     isSecureContext: secure,
     PublicKeyCredential: FakePublicKeyCredential,
   };
-  globalThis.location = { hostname: "keys.example" };
+  globalThis.location = { hostname: "approval.example.com" };
   globalThis.PublicKeyCredential = FakePublicKeyCredential;
   Object.defineProperty(globalThis, "crypto", {
     configurable: true,
@@ -143,7 +143,7 @@ test("approval uses the exact CLI challenge and derives from the v1 PRF input", 
   const output = await createApprovalAssertion(request, new AbortController().signal);
   const options = api.getOptions();
   assert.deepEqual(options.publicKey.challenge, request.challenge);
-  assert.equal(options.publicKey.rpId, "keys.example");
+  assert.equal(options.publicKey.rpId, "approval.example.com");
   assert.equal(options.publicKey.userVerification, "required");
   assert.equal(Object.hasOwn(options.publicKey, "allowCredentials"), false);
   assert.deepEqual(options.publicKey.extensions.prf.eval.first, prfInput("secret-x", 3));
