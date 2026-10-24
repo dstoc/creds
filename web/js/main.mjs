@@ -21,9 +21,46 @@ let approvalSession = null;
 let approvalController = null;
 let connectionController = null;
 let approvalCancelled = false;
+let connectionTimeout = null;
+let approvalTimeout = null;
+let connectionExpired = false;
+let approvalExpired = false;
 
 function show(value) {
   result.textContent = typeof value === "string" ? value : JSON.stringify(value, null, 2);
+}
+
+function approvalTimeLabel(milliseconds) {
+  const totalSeconds = Math.ceil(milliseconds / 1_000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (minutes && seconds) {
+    return minutes + " minute" + (minutes === 1 ? "" : "s")
+      + " " + seconds + " second" + (seconds === 1 ? "" : "s");
+  }
+  if (minutes) return minutes + " minute" + (minutes === 1 ? "" : "s");
+  return seconds + " second" + (seconds === 1 ? "" : "s");
+}
+
+function clearConnectionTimeout() {
+  if (connectionTimeout !== null) clearTimeout(connectionTimeout);
+  connectionTimeout = null;
+}
+
+function clearApprovalTimeout() {
+  if (approvalTimeout !== null) clearTimeout(approvalTimeout);
+  approvalTimeout = null;
+}
+
+function expireApproval() {
+  approvalTimeout = null;
+  if (!approvalSession?.isActive()) return;
+  approvalExpired = true;
+  approvalController?.abort();
+  approvalSession.close();
+  approveButton.disabled = true;
+  cancelButton.disabled = true;
+  show("The CLI approval window expired. Start a new CLI operation.");
 }
 
 async function run(button, action) {
@@ -116,8 +153,21 @@ async function startApprovalFlow() {
 
   try {
     connectionController = new AbortController();
-    show("Connecting to the pinned CLI…");
-    approvalSession = await connectHandoff(handoff, connectionController.signal);
+    connectionExpired = false;
+    show("Connecting to the pinned CLI. Connection setup must finish within 30 seconds…");
+    const connectionTimedOut = new Promise((_, reject) => {
+      connectionTimeout = setTimeout(() => {
+        connectionTimeout = null;
+        connectionExpired = true;
+        connectionController?.abort();
+        reject(new DOMException("Connection setup exceeded 30 seconds.", "TimeoutError"));
+      }, 30_000);
+    });
+    approvalSession = await Promise.race([
+      connectHandoff(handoff, connectionController.signal),
+      connectionTimedOut,
+    ]);
+    clearConnectionTimeout();
     if (approvalCancelled) {
       approvalSession.close();
       return;
@@ -127,19 +177,29 @@ async function startApprovalFlow() {
     document.querySelector("#request-name").textContent = request.name;
     document.querySelector("#request-revision").textContent = String(request.revision);
     document.querySelector("#request-operation").textContent = request.operation;
-    show("Connected to the pinned CLI. Check the request details, then select Approve and verify.");
+    show("Request established with the pinned CLI. Check the details, then approve within "
+      + approvalTimeLabel(request.approvalTimeoutMs) + ".");
     approveButton.disabled = false;
+    approvalExpired = false;
+    approvalTimeout = setTimeout(expireApproval, request.approvalTimeoutMs);
     approvalSession.failed.then((error) => {
+      clearApprovalTimeout();
       if (approvalController) approvalController.abort();
       approveButton.disabled = true;
       cancelButton.disabled = true;
-      show(`Approval session closed: ${error instanceof Error ? error.message : String(error)}`);
+      if (!approvalExpired) {
+        show(`Approval session closed by the CLI. The request may have expired or been cancelled: ${error instanceof Error ? error.message : String(error)}`);
+      }
     });
   } catch (error) {
     if (approvalCancelled) return;
     approveButton.disabled = true;
     cancelButton.disabled = true;
-    show(`Could not open the pinned CLI session: ${error instanceof Error ? error.message : String(error)}`);
+    show(connectionExpired
+      ? "Connection setup expired after 30 seconds. Start a new CLI operation and reconnect."
+      : `Could not open the pinned CLI session: ${error instanceof Error ? error.message : String(error)}`);
+  } finally {
+    clearConnectionTimeout();
   }
 }
 
@@ -156,7 +216,7 @@ approveButton.addEventListener("click", async () => {
   try {
     const approved = await createApprovalAssertion(approvalSession.request, approvalController.signal);
     if (approvalController.signal.aborted) {
-      throw new DOMException("Approval was cancelled.", "AbortError");
+      throw new DOMException(approvalExpired ? "Approval window expired." : "Approval was cancelled.", approvalExpired ? "TimeoutError" : "AbortError");
     }
     key = approved.key;
     if (!approvalSession.isActive()) {
@@ -165,15 +225,20 @@ approveButton.addEventListener("click", async () => {
     // Cancellation is available through the WebAuthn ceremony. Once the
     // approved response starts going onto the stream, prevent a late click
     // from appearing to cancel an operation that may already be received.
+    clearApprovalTimeout();
     cancelButton.disabled = true;
     await approvalSession.sendKey(key, approved.assertion);
     show("Approval sent. Check the CLI for the operation result.");
     cancelButton.disabled = true;
   } catch (error) {
     const cancelled = approvalController.signal.aborted;
-    show(cancelled
-      ? "Approval cancelled. No key was sent."
-      : `Approval failed: ${error instanceof Error ? error.message : String(error)}`);
+    if (approvalExpired) {
+      show("The CLI approval window expired. Start a new CLI operation.");
+    } else {
+      show(cancelled
+        ? "Approval cancelled. No key was sent."
+        : `Approval failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
     if (!approvalSession?.isActive()) cancelButton.disabled = true;
     else approveButton.disabled = false;
   } finally {
@@ -184,6 +249,8 @@ approveButton.addEventListener("click", async () => {
 
 cancelButton.addEventListener("click", () => {
   approvalCancelled = true;
+  clearConnectionTimeout();
+  clearApprovalTimeout();
   connectionController?.abort();
   approvalController?.abort();
   approvalSession?.close();

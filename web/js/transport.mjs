@@ -154,7 +154,7 @@ export function parseRequestMessage(bytes, requestBytes) {
   if (!request || typeof request !== "object" || Array.isArray(request)) {
     throw new TypeError("The CLI request must be a JSON object.");
   }
-  const fields = ["type", "version", "name", "revision", "operation", "challenge"];
+  const fields = ["type", "version", "name", "revision", "operation", "challenge", "approvalTimeoutMs"];
   if (Object.keys(request).length !== fields.length || fields.some((field) => !Object.hasOwn(request, field))) {
     throw new TypeError("The CLI request fields do not match protocol version 1.");
   }
@@ -165,6 +165,9 @@ export function parseRequestMessage(bytes, requestBytes) {
   validateRevision(request.revision);
   if (request.operation !== "encrypt" && request.operation !== "decrypt") {
     throw new TypeError("The CLI request operation must be encrypt or decrypt.");
+  }
+  if (!Number.isSafeInteger(request.approvalTimeoutMs) || request.approvalTimeoutMs < 1 || request.approvalTimeoutMs > 120_000) {
+    throw new TypeError("The CLI approval time must be from 1 through 120000 milliseconds.");
   }
   const challenge = decodeBase64Url(request.challenge);
   if (challenge.byteLength !== 32) throw new TypeError("The WebAuthn challenge must be 32 bytes.");
@@ -177,6 +180,7 @@ export function parseRequestMessage(bytes, requestBytes) {
     operation: request.operation,
     challenge,
     challengeText: request.challenge,
+    approvalTimeoutMs: request.approvalTimeoutMs,
   });
 }
 

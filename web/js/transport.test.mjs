@@ -86,6 +86,7 @@ const requestBody = new TextEncoder().encode(JSON.stringify({
   revision: 2,
   operation: "decrypt",
   challenge: encodeBase64Url(challengeBytes),
+  approvalTimeoutMs: 120_000,
 }));
 
 test("handoff fragment combines the machine label with the configured suffix, independent of app hostname", () => {
@@ -158,13 +159,20 @@ test("request parser rejects duplicate, unknown, cross-purpose, and malformed fi
   assert.equal(parsed.name, "secret-x");
   assert.equal(parsed.revision, 2);
   assert.equal(parsed.operation, "decrypt");
+  const shorterWindow = parseRequestMessage(
+    new TextEncoder().encode(JSON.stringify({ ...JSON.parse(new TextDecoder().decode(requestBody)), approvalTimeoutMs: 90_000 })),
+    requestBytes,
+  );
+  assert.equal(shorterWindow.approvalTimeoutMs, 90_000);
 
   const good = JSON.parse(new TextDecoder().decode(requestBody));
   const duplicate = new TextEncoder().encode(
-    `{"type":"request","version":1,"name":"secret-x","na\\u006de":"other","revision":2,"operation":"decrypt","challenge":"${encodeBase64Url(challengeBytes)}"}`,
+    `{"type":"request","version":1,"name":"secret-x","na\\u006de":"other","revision":2,"operation":"decrypt","challenge":"${encodeBase64Url(challengeBytes)}","approvalTimeoutMs":120000}`,
   );
   assert.throws(() => parseRequestMessage(duplicate, requestBytes), /Duplicate JSON field name/u);
   assert.throws(() => parseRequestMessage(new TextEncoder().encode(JSON.stringify({ ...good, extra: true })), requestBytes), /fields/u);
+  assert.throws(() => parseRequestMessage(new TextEncoder().encode(JSON.stringify({ ...good, approvalTimeoutMs: 0 })), requestBytes), /1 through 120000/u);
+  assert.throws(() => parseRequestMessage(new TextEncoder().encode(JSON.stringify({ ...good, approvalTimeoutMs: 120_001 })), requestBytes), /1 through 120000/u);
   assert.throws(() => parseRequestMessage(requestBody, challengeBytes), /distinct/u);
   assert.throws(() => parseRequestMessage(new Uint8Array(0), requestBytes), /empty/u);
   assert.throws(() => parseRequestMessage(new Uint8Array(16 * 1024 + 1), requestBytes), /16 KiB/u);
