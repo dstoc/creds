@@ -12,6 +12,7 @@ use std::{
 };
 
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+use creds::envelope::Envelope;
 use p256::{
     ecdsa::{Signature, SigningKey, signature::Signer},
     pkcs8::EncodePublicKey,
@@ -291,7 +292,7 @@ impl ApprovalSession {
         assert_eq!(self.request["operation"], operation);
     }
 
-    async fn send_key(mut self, key: [u8; 32], signer: &SigningKey) -> Result<(), Box<dyn Error>> {
+    fn key_message(&self, key: [u8; 32], signer: &SigningKey) -> Result<Vec<u8>, Box<dyn Error>> {
         let challenge = self.request["challenge"].as_str().unwrap();
         let client_data = serde_json::to_vec(&json!({
             "type": "webauthn.get",
@@ -313,10 +314,27 @@ impl ApprovalSession {
                 "signature": URL_SAFE_NO_PAD.encode(signature.to_der().as_bytes()),
             },
         }))?;
-        write_frame(&mut self.send, &key_message).await?;
+        Ok(key_message)
+    }
+
+    async fn send_message(mut self, message: &[u8]) -> Result<(), Box<dyn Error>> {
+        write_frame(&mut self.send, message).await?;
         self.send.finish().await?;
         tokio::time::timeout(Duration::from_secs(5), self.connection.closed()).await?;
         Ok(())
+    }
+
+    async fn send_duplicate_message(mut self, message: &[u8]) -> Result<(), Box<dyn Error>> {
+        write_frame(&mut self.send, message).await?;
+        write_frame(&mut self.send, message).await?;
+        self.send.finish().await?;
+        tokio::time::timeout(Duration::from_secs(5), self.connection.closed()).await?;
+        Ok(())
+    }
+
+    async fn send_key(self, key: [u8; 32], signer: &SigningKey) -> Result<(), Box<dyn Error>> {
+        let message = self.key_message(key, signer)?;
+        self.send_message(&message).await
     }
 }
 
@@ -560,5 +578,109 @@ async fn encrypt_decrypt_commands_use_authenticated_live_handoffs_and_frozen_sna
     assert_eq!(fs::read(&ciphertext_path)?, ciphertext_before);
     assert_eq!(fs::read(&file_output)?, b"existing destination");
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn simultaneous_sessions_reject_duplicate_and_cross_connection_responses()
+-> Result<(), Box<dyn Error>> {
+    let directory = TestDirectory::new()?;
+    let config = TestConfig::new(&directory)?;
+    let signer = fixture_signing_key();
+    let plaintext = b"only one live session may publish";
+    let key_a = [0xa1; 32];
+    let key_c = [0xc3; 32];
+    let key_d = [0xd4; 32];
+    let command =
+        RunningCommand::start(&config, "encrypt", "race", Path::new("-"), Some(plaintext))?;
+
+    let session_a = connect_approval(command.approve_url()).await?;
+    let session_b = connect_approval(command.approve_url()).await?;
+    let session_c = connect_approval(command.approve_url()).await?;
+    let session_d = connect_approval(command.approve_url()).await?;
+    session_a.assert_request("race", 1, "encrypt");
+    session_b.assert_request("race", 1, "encrypt");
+    session_c.assert_request("race", 1, "encrypt");
+    session_d.assert_request("race", 1, "encrypt");
+    let challenge_a = session_a.request["challenge"].as_str().unwrap().to_owned();
+    let challenge_b = session_b.request["challenge"].as_str().unwrap();
+    let challenge_c = session_c.request["challenge"].as_str().unwrap();
+    let challenge_d = session_d.request["challenge"].as_str().unwrap();
+    assert_ne!(challenge_a, challenge_b);
+    assert_ne!(challenge_a, challenge_c);
+    assert_ne!(challenge_a, challenge_d);
+    assert_ne!(challenge_b, challenge_c);
+    assert_ne!(challenge_b, challenge_d);
+    assert_ne!(challenge_c, challenge_d);
+
+    let replay = session_a.key_message(key_a, &signer)?;
+    let replayed_key = URL_SAFE_NO_PAD.encode(key_c);
+    assert!(!command.approve_url().as_str().contains(&replayed_key));
+    let key_d_encoded = URL_SAFE_NO_PAD.encode(key_d);
+    assert!(!command.approve_url().as_str().contains(&key_d_encoded));
+
+    // A repeated response on session A and A's valid signature replayed on B
+    // both fail. The two remaining sessions race with their own valid challenges.
+    session_a.send_duplicate_message(&replay).await?;
+    session_b.send_message(&replay).await?;
+    let (response_c, response_d) = tokio::join!(
+        session_c.send_key(key_c, &signer),
+        session_d.send_key(key_d, &signer)
+    );
+    assert!(
+        response_c.is_ok() || response_d.is_ok(),
+        "both valid concurrent responses failed: {response_c:?}; {response_d:?}"
+    );
+
+    let output = command.finish()?;
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains(&replayed_key));
+    assert!(!stderr.contains(&replayed_key));
+    assert!(!stdout.contains(&key_d_encoded));
+    assert!(!stderr.contains(&key_d_encoded));
+
+    let envelope_path = config.storage.join("race.json");
+    let envelope = Envelope::parse(&fs::read(&envelope_path)?)?;
+    let decrypted_c = envelope.decrypt(&key_c);
+    let decrypted_d = envelope.decrypt(&key_d);
+    assert_ne!(
+        decrypted_c.is_ok(),
+        decrypted_d.is_ok(),
+        "exactly one concurrent valid response must win"
+    );
+    if let Ok(decrypted) = decrypted_c {
+        assert_eq!(decrypted.as_slice(), plaintext);
+    }
+    if let Ok(decrypted) = decrypted_d {
+        assert_eq!(decrypted.as_slice(), plaintext);
+    }
+    assert!(envelope.decrypt(&key_a).is_err());
+
+    let files = fs::read_dir(&config.storage)?
+        .map(|entry| {
+            let entry = entry?;
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let contents = fs::read(entry.path())?;
+            Ok::<_, std::io::Error>((name, contents))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    assert!(files.iter().any(|(name, _)| name == "race.json"));
+    for (name, contents) in files {
+        assert!(!name.ends_with(".tmp"), "left a staging file: {name}");
+        assert!(
+            !String::from_utf8_lossy(&contents).contains(&replayed_key),
+            "stored {name} contains the approved key"
+        );
+        assert!(
+            !String::from_utf8_lossy(&contents).contains(&key_d_encoded),
+            "stored {name} contains the approved key"
+        );
+    }
     Ok(())
 }

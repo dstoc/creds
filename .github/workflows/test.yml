@@ -17,5 +17,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
       - name: Run format, lint, and tests
         run: ./scripts/test.sh
