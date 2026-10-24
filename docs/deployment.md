@@ -76,7 +76,7 @@ The hyphen reads encryption input from standard input or writes decrypted plaint
 
 Run creds check after setup. It validates local configuration and storage paths. It does not test passkey possession, browser compatibility, DNS, UDP reachability, file permissions for a future operation, or whether a secret can be decrypted.
 
-On Unix, setup creates owner-only configuration and secret directories and a mode 0600 configuration file. The storage directory must remain owner-only (mode 0700). On other operating systems, apply equivalent owner-only filesystem access controls because Unix mode bits are not available to the CLI there. Keep the configuration and secret directory in a local filesystem that supports exclusive file creation, atomic rename within a directory, file sync, and directory sync.
+On Unix, setup creates owner-only configuration and secret directories and a mode 0600 configuration file. The storage directory must remain owner-only (mode 0700). On other operating systems, apply equivalent owner-only filesystem access controls because Unix mode bits are not available to the CLI there. Use a case-sensitive local filesystem that supports exclusive file creation, atomic rename within a directory, file sync, and directory sync. Secret names are case-sensitive, so `Token` and `token` are distinct names that require distinct JSON and lock paths. A case-insensitive filesystem can map both names to the same paths.
 
 ## Trust, recovery, and key handling
 
