@@ -118,9 +118,6 @@ impl OperationWindow {
                 let deadline = Instant::now() + APPROVAL_TIMEOUT;
                 *phase = OperationPhase::Approval { deadline };
                 self.phase_changed.send_replace(*phase);
-                eprintln!(
-                    "Approval request established. Waiting up to two minutes for passkey approval."
-                );
                 Ok(deadline)
             }
             OperationPhase::Approval { deadline } if Instant::now() < deadline => Ok(deadline),
@@ -303,12 +300,7 @@ pub async fn receive_key(
         "Or scan this QR code (machine label {}, UDP port {port}; the approval app adds its configured DNS suffix):\n{qr_image}",
         config.hostname
     );
-    eprintln!(
-        "Waiting for a browser connection; each connection has 30 seconds to establish its request."
-    );
-    eprintln!(
-        "The first established request gets two minutes; later connections get only the time remaining. Use Ctrl-C to cancel."
-    );
+    eprintln!("Waiting for approval. Press Ctrl-C to cancel.");
 
     if *cancellation.borrow() {
         endpoint.close(VarInt::from_u32(0), b"operation cancelled");
