@@ -1,0 +1,9 @@
+[package]
+name = "creds-qr-rendering"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+base64 = "0.23.1"
+qrcode = { version = "0.14.1", default-features = false }

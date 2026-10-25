@@ -64,6 +64,18 @@ creds check
 
 During setup, enter the app URL, one-label machine name, secret storage directory, public key, and UDP listener address. Review the displayed origin, RP ID, advertised hostname, storage path, listener address, and public-key fingerprint before saving. Setup refuses to replace an existing configuration without an explicit confirmation.
 
+QR rendering uses the optional `qr_mode` setting in `config.toml`. Omit it to keep the default `half` renderer. Setup does not ask for a QR mode. When setup replaces an existing configuration, it preserves a valid configured mode.
+
+~~~toml
+qr_mode = "braille" # optional: braille, sextant, half, or kitty
+~~~
+
+`braille` packs two columns by four rows of modules into each Unicode Braille character. `sextant` packs two by three modules into Symbols for Legacy Computing sextant characters. These modes need a terminal font with the corresponding Unicode glyphs; sextant glyphs are in Unicode 13.0 and later. `half` keeps the existing upper/lower half-block rendering and is the default.
+
+The text renderers use the terminal's inverse video colors for the QR so dark modules and the light quiet zone remain distinct in both dark and light terminal themes.
+
+`kitty` sends a black-and-white RGB image through the [Kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/). The CLI emits the image only when standard error is a terminal and it detects Kitty, WezTerm, or Ghostty from their environment markers (`KITTY_WINDOW_ID`, `WEZTERM_PANE`, or `TERM=xterm-ghostty` / `TERM_PROGRAM=ghostty`). If it cannot detect a supported terminal, or standard error is redirected, it prints an explanatory message and keeps the approval URL available. It does not switch to another QR mode or write image data to standard output. A terminal or multiplexer can still reject the protocol after detection; use the URL in that case.
+
 The default configuration path is XDG_CONFIG_HOME/creds/config.toml, or ~/.config/creds/config.toml when XDG_CONFIG_HOME is not set. The default secret directory is XDG_DATA_HOME/creds/secrets, or ~/.local/share/creds/secrets when XDG_DATA_HOME is not set. Relative storage paths are resolved from the configuration file's directory. Use --config PATH to select another configuration file.
 
 Run one command for each operation:
@@ -77,7 +89,7 @@ creds decrypt NAME -
 
 The hyphen reads encryption input from standard input or writes decrypted plaintext to standard output. Named output files are created exclusively and are not overwritten. The CLI prints a temporary approval URL and terminal QR to standard error and waits for a browser connection. Each connection has 30 seconds to establish the request. The first established request gets two minutes for passkey user verification; later connections receive only the time that remains. The browser closes the request when its timer expires. If no browser connects, use Ctrl-C to cancel the CLI. An operation succeeds only after the CLI verifies the assertion and completes its local storage operation.
 
-Run `creds check` after setup for a concise validation result. Run `creds check --details` to show the resolved configuration and storage paths, app origin, RP ID, listener, and pinned-key fingerprint. This local, read-only check does not prove passkey possession, browser compatibility, DNS, UDP reachability, file permissions for a future operation, or whether a secret can be decrypted.
+Run `creds check` after setup for a concise validation result. Run `creds check --details` to show the resolved configuration and storage paths, app origin, RP ID, listener, QR mode, and pinned-key fingerprint. An unknown `qr_mode` value fails with a diagnostic that lists the supported values. This local, read-only check does not prove passkey possession, browser compatibility, DNS, UDP reachability, file permissions for a future operation, or whether a secret can be decrypted.
 
 On Unix, setup creates owner-only configuration and secret directories and a mode 0600 configuration file. The storage directory must remain owner-only (mode 0700). On other operating systems, apply equivalent owner-only filesystem access controls because Unix mode bits are not available to the CLI there. Use a case-sensitive local filesystem that supports exclusive file creation, atomic rename within a directory, file sync, and directory sync. Secret names are case-sensitive, so `Token` and `token` are distinct names that require distinct JSON and lock paths. A case-insensitive filesystem can map both names to the same paths.
 
@@ -99,6 +111,8 @@ Run ./scripts/test.sh. GitHub Actions runs this command in the required workflow
 
 The automated and manual checks map to the proposal as follows:
 
+The command-flow test also records redacted synthetic CLI transcripts for the four QR modes in [CLI output captures](cli-captures/README.md).
+
 | Proposal contract | Verification |
 | --- | --- |
 | Stable v1 PRF, HKDF, AAD, and envelope bytes | Shared fixture in test-vectors/envelope-v1.json; Rust tests in src/protocol.rs; Node tests in web/js/envelope.test.mjs |
@@ -107,6 +121,7 @@ The automated and manual checks map to the proposal as follows:
 | Approval cancellation, connection loss, and safe request display | Browser tests in web/js/main.test.mjs and web/js/webauthn.test.mjs |
 | Concurrent writer exclusion, replacement snapshots, revision overflow, tampered files, and publication failures | Rust tests in src/storage.rs; the CLI snapshot race in tests/command_flow.rs |
 | Config parsing, explicit paths, storage checks, and read-only check behavior | Rust tests in src/config.rs |
+| QR encoding, Braille/sextant/half geometry, quiet zones, and Kitty protocol framing | Unit tests in qr-rendering; CLI stream and config coverage in tests/command_flow.rs and src/config.rs |
 | Security headers, JavaScript MIME type, and missing-module failure | Python tests in scripts/test_serve.py |
 | Only validated public settings persist; no key material, handoff data, or remote assets persist | Settings and UI tests in web/js/settings.test.mjs and web/js/main.test.mjs |
 | Key separation from URLs, CLI output, and published files | CLI integration assertions in tests/command_flow.rs. Code review confirms src/main.rs accepts no key argument or key environment setting; handoff keys arrive only in the bounded, assertion-verified message. |
@@ -116,5 +131,7 @@ The automated and manual checks map to the proposal as follows:
 The automated destination tests use a public-style approval hostname and a different user-configured machine DNS suffix. They check suffix and prefix normalization, combined hostname validation, and rejection of QR destination/suffix/path overrides. They do not resolve tailnet names or test deployed UDP reachability.
 
 The runner has no physical authenticator or deployment network. The Chromium procedure exercises loopback WebTransport and a virtual CTAP 2.1 authenticator only. Do not treat it as evidence for every browser, authenticator, passkey provider, or deployment network.
+
+QR renderer tests check known module layouts and Kitty protocol bytes without terminal hardware. No physical Kitty-compatible terminal was available on the implementation runner. Manually verify Kitty display and scanning in the intended terminal and font before relying on that mode.
 
 See browser-compatibility.md for the development-only Chromium and virtual-authenticator procedures and results. Before release, repeat passkey creation and export, approval, wrong-passkey failure, and repeat decryption on each intended physical device and passkey provider. Also test browser local-network permission prompts and UDP reachability from a separate device on the deployed network. Those checks were not available on the implementation runner.

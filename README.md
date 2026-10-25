@@ -9,6 +9,8 @@ creds decrypt deploy-token -
 
 Each command prints a temporary URL and QR code. Open the URL or scan the code in your trusted browser app, review the request, and approve it with your passkey. The decrypted value in this example goes to standard output.
 
+The optional `qr_mode` configuration setting selects `braille`, `sextant`, `half` (the default), or `kitty` rendering. See the [deployment guide](docs/deployment.md#configure-and-use-the-cli) for examples and terminal requirements.
+
 ## How it works
 
 The CLI stores each secret as local ciphertext. The same passkey, name, and revision derive the same key, so you can decrypt a stored revision again after a new approval. Your browser sends that key to the CLI over a direct, encrypted connection pinned to the certificate in the request. The CLI verifies the passkey assertion before it accepts the key and completes the operation. Remembering a machine can skip its destination prompt; every request still needs your approval.

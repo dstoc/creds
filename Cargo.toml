@@ -5,6 +5,10 @@ edition = "2024"
 description = "Browser-approved credential encryption"
 license = "MIT"
 
+[workspace]
+members = [".", "qr-rendering"]
+resolver = "3"
+
 [features]
 dev-tools = []
 
@@ -22,7 +26,7 @@ fs2 = "0.4.3"
 getrandom = "0.4.3"
 hkdf = "0.13.0"
 p256 = { version = "0.14.0", features = ["ecdsa", "pkcs8"] }
-qrcode = { version = "0.14.1", default-features = false }
+creds-qr-rendering = { path = "qr-rendering" }
 rcgen = "0.14.10"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"

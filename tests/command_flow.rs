@@ -58,6 +58,61 @@ fn production_cli_help_omits_the_development_probe_server() {
     assert!(diagnostic.contains("Usage: creds"));
 }
 
+#[tokio::test]
+async fn each_qr_mode_keeps_the_url_and_output_streams_separate() -> Result<(), Box<dyn Error>> {
+    let directory = TestDirectory::new()?;
+    let config = TestConfig::new(&directory)?;
+    let signer = fixture_signing_key();
+    for mode in ["braille", "sextant", "half", "kitty"] {
+        config.set_qr_mode(mode)?;
+        let name = format!("qr-{mode}");
+        let command = RunningCommand::start(
+            &config,
+            "encrypt",
+            &name,
+            Path::new("-"),
+            Some(b"synthetic QR rendering capture"),
+        )?;
+        let url = command.approve_url().to_string();
+        let approval = connect_approval(command.approve_url()).await?;
+        approval.assert_request(&name, 1, "encrypt");
+        approval.send_key([0x4d; 32], &signer).await?;
+        let output = command.finish()?;
+
+        assert_silent_encryption(&output, 1);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains(&format!("Or scan this {mode} QR code")));
+        assert!(stderr.contains(&format!("Open this URL on the approval device: {url}")));
+        assert!(stderr.contains("Waiting for approval. Press Ctrl-C to cancel."));
+        if mode == "kitty" {
+            assert!(stderr.contains("Kitty QR was selected but stderr is not a recognized"));
+        }
+        capture_cli_output(
+            &format!("qr-mode-{mode}"),
+            "cargo test --locked --test command_flow each_qr_mode_keeps_the_url_and_output_streams_separate -- --exact",
+            &format!("creds encrypt {name} -"),
+            "synthetic plaintext: `synthetic QR rendering capture`; synthetic valid assertion and matching key supplied",
+            &output,
+        )?;
+
+        let decrypt = RunningCommand::start(&config, "decrypt", &name, Path::new("-"), None)?;
+        let url = decrypt.approve_url().to_string();
+        let approval = connect_approval(decrypt.approve_url()).await?;
+        approval.assert_request(&name, 1, "decrypt");
+        approval.send_key([0x4d; 32], &signer).await?;
+        let output = decrypt.finish()?;
+        assert!(output.status.success());
+        assert_eq!(output.stdout, b"synthetic QR rendering capture");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains(&format!("Or scan this {mode} QR code")));
+        assert!(stderr.contains(&format!("Open this URL on the approval device: {url}")));
+        if mode == "kitty" {
+            assert!(stderr.contains("Kitty QR was selected but stderr is not a recognized"));
+        }
+    }
+    Ok(())
+}
+
 /// This deterministic key stands in for a passkey credential in the protocol fixture.
 /// It exercises real signature verification, but it is not a physical authenticator.
 fn fixture_signing_key() -> SigningKey {
@@ -125,6 +180,22 @@ impl TestConfig {
             fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
         }
         Ok(Self { path, storage })
+    }
+
+    fn set_qr_mode(&self, mode: &str) -> Result<(), Box<dyn Error>> {
+        let contents = fs::read_to_string(&self.path)?;
+        let contents = contents
+            .lines()
+            .filter(|line| !line.starts_with("qr_mode ="))
+            .collect::<Vec<_>>()
+            .join("\n");
+        fs::write(&self.path, format!("{contents}\nqr_mode = {mode:?}\n"))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&self.path, fs::Permissions::from_mode(0o600))?;
+        }
+        Ok(())
     }
 }
 
@@ -346,14 +417,20 @@ fn redact_live_handoff(stderr: &str) -> String {
     for line in stderr.lines() {
         if line.starts_with("Open this URL on the approval device:") {
             redacted.push_str("[REDACTED live handoff URL, request ID, and certificate pin]\n");
-        } else if line.starts_with("Or scan this QR code") {
-            redacted.push_str("[REDACTED live QR code, machine label, and UDP port]\n");
+        } else if line.starts_with("Or scan this ") && line.contains(" QR code") {
+            let mode = line
+                .strip_prefix("Or scan this ")
+                .and_then(|line| line.split_once(" QR code"))
+                .map_or("unknown", |(mode, _)| mode);
+            redacted.push_str(&format!(
+                "[REDACTED live {mode} QR code, machine label, and UDP port]\n"
+            ));
             in_qr = true;
         } else if in_qr && line.starts_with("Waiting for approval.") {
             in_qr = false;
             redacted.push_str(line);
             redacted.push('\n');
-        } else if !in_qr {
+        } else if !in_qr || line.starts_with("Kitty QR was selected") {
             redacted.push_str(line);
             redacted.push('\n');
         }

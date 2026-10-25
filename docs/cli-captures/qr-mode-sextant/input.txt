@@ -1,0 +1,1 @@
+synthetic plaintext: `synthetic QR rendering capture`; synthetic valid assertion and matching key supplied
