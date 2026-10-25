@@ -184,8 +184,9 @@ test("first-time setup offers an existing-passkey path without requiring a saved
   assert.equal(ui.element("#ready-panel").hidden, true);
   assert.equal(ui.element("#setup-choice").hidden, false);
   assert.equal(ui.element("#setup-flow").hidden, true);
+  assert.equal(ui.element("#setup-title").textContent, "Set up this browser");
   await ui.click("#setup-use-existing");
-  assert.equal(ui.element("#setup-existing-note").hidden, false);
+  assert.equal(ui.element("#setup-title").textContent, "Use existing passkey");
   assert.equal(ui.element("#setup-import-key").hidden, false);
   assert.equal(ui.element("#setup-created-key").hidden, true);
   assert.equal(creations, 0);
@@ -233,26 +234,40 @@ test("existing-passkey setup permits optional public-key import without creating
 
 test("create-passkey setup confirms PRF, shows the exported key, and supports copy and suffix setup", async () => {
   let creations = 0;
+  let resolveCreatedPasskey;
+  const createdPasskey = new Promise((resolve) => { resolveCreatedPasskey = resolve; });
   const ui = startApprovalUi({
     hash: "",
     initialSettings: { version: 1, publicKey: null, suffix: "", acceptedPrefixes: [] },
     connectHandoff: async () => createSession(),
     createPasskey: async () => {
       creations += 1;
-      return { publicKey: "exported-setup-key", publicKeyAlgorithm: "ES256 (-7)" };
+      return createdPasskey;
     },
   });
   await settle();
 
-  await ui.click("#setup-create-passkey");
+  assert.equal(ui.element("#setup-title").textContent, "Set up this browser");
+  const creation = ui.click("#setup-create-passkey");
   await settle();
   assert.equal(creations, 1);
+  assert.equal(ui.element("#setup-title").textContent, "Set up this browser");
+  assert.equal(ui.element("#setup-created-key").hidden, true);
+  resolveCreatedPasskey({ publicKey: "exported-setup-key", publicKeyAlgorithm: "ES256 (-7)" });
+  await creation;
+  await settle();
   assert.equal(ui.element("#setup-created-key").hidden, false);
+  assert.equal(ui.element("#setup-title").textContent, "Passkey created");
   assert.equal(ui.element("#setup-public-key").value, "exported-setup-key");
   assert.equal(ui.element("#result").textContent, "");
   assert.equal(ui.writes[0].publicKey, "exported-setup-key");
   const html = readFileSync(new URL("../index.html", import.meta.url), "utf8");
-  assert.match(html, /Run <code>creds setup<\/code> and paste this key/u);
+  assert.match(html, /<label for="setup-public-key">Public key<\/label>/u);
+  assert.match(html, /Run <code>creds setup<\/code> and paste this key\./u);
+  assert.doesNotMatch(html, /Choose how you use passkeys with creds\./u);
+  assert.doesNotMatch(html, /Passkey created and PRF confirmed\./u);
+  assert.doesNotMatch(html, /Your passkey is used when you approve requests\. You do not need to import a public key here\./u);
+  assert.doesNotMatch(html, /Exported public key/u);
 
   await ui.click("#copy-setup-public-key");
   await settle();
@@ -277,6 +292,7 @@ test("cancelled passkey creation reports the failure and leaves existing setup a
 
   await ui.click("#setup-create-passkey");
   await settle();
+  assert.equal(ui.element("#setup-title").textContent, "Set up this browser");
   assert.equal(ui.element("#setup-choice").hidden, false);
   assert.equal(ui.element("#setup-flow").hidden, true);
   assert.match(ui.element("#result").textContent, /NotAllowedError/u);
