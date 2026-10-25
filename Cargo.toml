@@ -16,6 +16,7 @@ required-features = ["dev-tools"]
 [dependencies]
 base64 = "0.23.1"
 aes-gcm = "0.11.1"
+clap = { version = "4.6.7", features = ["derive"] }
 ciborium = "0.2.2"
 fs2 = "0.4.3"
 getrandom = "0.4.3"
