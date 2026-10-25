@@ -54,7 +54,9 @@ fn validate_config_arguments() {
     let mut config_seen = false;
 
     while let Some(argument) = arguments.next() {
-        if argument == "--config" {
+        if argument == "--" {
+            break;
+        } else if argument == "--config" {
             if config_seen {
                 config_argument_error(
                     ErrorKind::ArgumentConflict,
