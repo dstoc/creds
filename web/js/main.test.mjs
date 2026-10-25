@@ -37,12 +37,28 @@ function createSession(request = REQUEST) {
   return session;
 }
 
-function startApprovalUi({ connectHandoff, createApprovalAssertion = async () => ({
+function startApprovalUi({
+  connectHandoff,
+  createApprovalAssertion = async () => ({
   key: new Uint8Array(32),
   assertion: {},
-}) }) {
+  }),
+  initialSettings = {
+    version: 1,
+    publicKey: null,
+    suffix: "tailnet.example.net",
+    acceptedPrefixes: ["workstation"],
+  },
+  loadStatus = "ok",
+  saveError = null,
+  confirmAnswer = true,
+  hash = "#v=1",
+  createPasskey = async () => ({ publicKey: "public-key", publicKeyAlgorithm: "ES256 (-7)" }),
+} = {}) {
   const elements = new Map();
   const historyCalls = [];
+  const confirmations = [];
+  const writes = [];
   const timers = new Map();
   let nextTimerId = 1;
   const setTimeout = (callback, delay) => {
@@ -60,7 +76,10 @@ function startApprovalUi({ connectHandoff, createApprovalAssertion = async () =>
         textContent: "",
         innerHTML: "",
         handlers: {},
+        children: [],
         addEventListener(type, handler) { this.handlers[type] = handler; },
+        append(...children) { this.children.push(...children); },
+        replaceChildren(...children) { this.children = [...children]; },
         focus() {},
         select() {},
       });
@@ -72,29 +91,57 @@ function startApprovalUi({ connectHandoff, createApprovalAssertion = async () =>
   const context = vm.createContext({
     document: {
       querySelector: element,
-      querySelectorAll: () => [
-        "#create-passkey",
-        "#copy-public-key",
-        "#approve-request",
-        "#cancel-request",
-      ].map(element),
+      createElement: (tagName) => Object.assign(element(`generated-${elements.size}`), { tagName }),
     },
-    location: { hash: "#v=1", pathname: "/", search: "" },
+    location: { hash, pathname: "/", search: "", protocol: "https:", hostname: "approval.example.com" },
     history: { replaceState(...args) { historyCalls.push(args); } },
     AbortController,
     DOMException,
     setTimeout,
     clearTimeout,
-    parseHandoffFragment: () => Object.freeze({ fullHostname: "workstation.tailnet.example.net" }),
+    confirm: (message) => { confirmations.push(message); return confirmAnswer; },
+    navigator: { clipboard: { async writeText() {} } },
+    emptySettings: () => ({ version: 1, publicKey: null, suffix: "", acceptedPrefixes: [] }),
+    loadSettings: async () => ({ status: loadStatus, settings: structuredClone(initialSettings), error: null }),
+    saveSettings: async (value) => {
+      if (saveError) throw saveError;
+      writes.push(structuredClone(value));
+      return structuredClone(value);
+    },
+    validateSettings: async (value) => {
+      if (value.suffix) value.suffix = value.suffix.trim().toLowerCase();
+      return structuredClone(value);
+    },
+    resetSettings() {},
+    validatePublicKey: async (value) => value,
+    normalizeSuffix: (value) => {
+      const suffix = value.trim().toLowerCase();
+      if (!suffix || suffix.includes("/")) throw new TypeError("invalid suffix");
+      return suffix;
+    },
+    MAX_ACCEPTED_PREFIXES: 128,
+    parseHandoffFragment: () => Object.freeze({ prefix: "workstation", port: 8443 }),
+    buildHandoffDestination: (handoff, suffix) => {
+      if (!suffix) throw new TypeError("A machine DNS suffix is required.");
+      return Object.freeze({
+        ...handoff,
+        suffix,
+        prefix: handoff.prefix.toLowerCase(),
+        fullHostname: `${handoff.prefix.toLowerCase()}.${suffix}`,
+        endpoint: `https://${handoff.prefix.toLowerCase()}.${suffix}:${handoff.port}/key`,
+      });
+    },
     connectHandoff,
     createApprovalAssertion,
-    createPasskey: async () => ({}),
+    createPasskey,
   });
 
   vm.runInContext(source, context);
   return {
     element,
     historyCalls,
+    confirmations,
+    writes,
     timerDelays: () => [...timers.values()].map(({ delay }) => delay),
     fireTimers() {
       const pending = [...timers.values()];
@@ -126,7 +173,9 @@ test("approval stays disabled until the pinned request is displayed", async () =
   resolveConnection(session);
   await settle();
 
-  assert.equal(ui.element("#request-host").textContent, "workstation.tailnet.example.net");
+  assert.equal(ui.element("#request-host").textContent, "workstation.tailnet.example.net:8443");
+  assert.equal(ui.element("#request-prefix").textContent, "workstation");
+  assert.equal(ui.element("#request-suffix").textContent, "tailnet.example.net");
   assert.equal(ui.element("#request-name").textContent, "secret");
   assert.equal(ui.element("#request-revision").textContent, "7");
   assert.equal(ui.element("#request-operation").textContent, "encrypt");
@@ -146,14 +195,228 @@ test("request fields are inserted as text, including markup-shaped names", async
   assert.equal(ui.element("#request-name").innerHTML, "");
 });
 
-test("the static client uses no persistent browser storage or remote assets", () => {
+test("an unfamiliar destination needs explicit acceptance before connection and still needs request approval", async () => {
+  const session = createSession();
+  let connections = 0;
+  let ceremonies = 0;
+  const ui = startApprovalUi({
+    initialSettings: { version: 1, publicKey: null, suffix: "tailnet.example.net", acceptedPrefixes: [] },
+    connectHandoff: async () => { connections += 1; return session; },
+    createApprovalAssertion: async () => { ceremonies += 1; return { key: new Uint8Array(32), assertion: {} }; },
+  });
+  await settle();
+
+  assert.deepEqual(ui.historyCalls, [[null, "", "/"]]);
+  assert.equal(ui.element("#destination-prefix").textContent, "workstation");
+  assert.equal(ui.element("#destination-suffix").textContent, "tailnet.example.net");
+  assert.equal(ui.element("#destination-host").textContent, "workstation.tailnet.example.net:8443");
+  assert.equal(ui.element("#destination-panel").hidden, false);
+  assert.equal(connections, 0);
+  assert.equal(ceremonies, 0);
+
+  await ui.click("#accept-destination");
+  await settle();
+  assert.equal(connections, 1);
+  assert.deepEqual(ui.writes[0].acceptedPrefixes, ["workstation"]);
+  assert.equal(ui.element("#approve-request").disabled, false);
+  assert.equal(ceremonies, 0, "destination acceptance does not invoke WebAuthn");
+
+  await ui.click("#approve-request");
+  assert.equal(ceremonies, 1);
+  assert.equal(session.sent.length, 1);
+});
+
+test("declining an unfamiliar destination neither connects nor saves an acceptance", async () => {
+  let connections = 0;
+  const ui = startApprovalUi({
+    initialSettings: { version: 1, publicKey: null, suffix: "tailnet.example.net", acceptedPrefixes: [] },
+    connectHandoff: async () => { connections += 1; return createSession(); },
+  });
+  await settle();
+
+  await ui.click("#decline-destination");
+  assert.equal(connections, 0);
+  assert.equal(ui.writes.length, 0);
+  assert.equal(ui.element("#destination-panel").hidden, true);
+  assert.match(ui.element("#result").textContent, /No key was sent/u);
+});
+
+test("missing suffix keeps the handoff in memory until settings are saved", async () => {
+  let connections = 0;
+  const ui = startApprovalUi({
+    initialSettings: { version: 1, publicKey: null, suffix: "", acceptedPrefixes: [] },
+    connectHandoff: async () => { connections += 1; return createSession(); },
+  });
+  await settle();
+  assert.equal(connections, 0);
+  assert.deepEqual(ui.historyCalls, [[null, "", "/"]]);
+  assert.match(ui.element("#result").textContent, /Save a machine DNS suffix/u);
+
+  ui.element("#dns-suffix").value = " TailNet.Example.Net ";
+  await ui.click("#save-settings");
+  await settle();
+  assert.equal(ui.writes[0].suffix, "tailnet.example.net");
+  assert.equal(connections, 0, "saving the suffix does not accept a new destination");
+  assert.equal(ui.element("#destination-panel").hidden, false);
+  assert.equal(ui.element("#destination-suffix").textContent, "tailnet.example.net");
+});
+
+test("malformed stored settings block handoff until the user confirms reset", async () => {
+  let connections = 0;
+  const ui = startApprovalUi({
+    loadStatus: "invalid",
+    connectHandoff: async () => { connections += 1; return createSession(); },
+  });
+  await settle();
+  assert.equal(connections, 0);
+  assert.equal(ui.element("#settings-controls").disabled, true);
+  assert.equal(ui.element("#reset-settings").disabled, false);
+  assert.match(ui.element("#result").textContent, /explicit reset/u);
+
+  await ui.click("#reset-settings");
+  await settle();
+  assert.equal(ui.confirmations.length, 1);
+  assert.equal(ui.element("#settings-controls").disabled, false);
+  assert.equal(connections, 0);
+  assert.match(ui.element("#result").textContent, /machine DNS suffix/u);
+});
+
+test("storage write failure accepts only in page memory and does not claim the destination was remembered", async () => {
+  const session = createSession();
+  let connections = 0;
+  const ui = startApprovalUi({
+    loadStatus: "unavailable",
+    initialSettings: { version: 1, publicKey: null, suffix: "tailnet.example.net", acceptedPrefixes: [] },
+    saveError: new DOMException("quota", "QuotaExceededError"),
+    connectHandoff: async () => { connections += 1; return session; },
+  });
+  await settle();
+  assert.match(ui.element("#destination-note").textContent, /page only/u);
+
+  await ui.click("#accept-destination");
+  await settle();
+  assert.equal(connections, 1);
+  assert.equal(ui.writes.length, 0);
+  assert.match(ui.element("#settings-status").textContent, /not remembered/u);
+});
+
+test("a full accepted-prefix list offers a one-time acceptance without writing it", async () => {
+  const acceptedPrefixes = Array.from({ length: 128 }, (_, index) => `machine-${index}`);
+  let connections = 0;
+  const ui = startApprovalUi({
+    initialSettings: { version: 1, publicKey: null, suffix: "tailnet.example.net", acceptedPrefixes },
+    connectHandoff: async () => { connections += 1; return createSession(); },
+  });
+  await settle();
+  assert.equal(ui.element("#accept-destination").textContent, "Accept once and continue");
+  assert.match(ui.element("#destination-note").textContent, /128-prefix list is full/u);
+
+  await ui.click("#accept-destination");
+  await settle();
+  assert.equal(connections, 1);
+  assert.equal(ui.writes.length, 0);
+  assert.match(ui.element("#settings-status").textContent, /once/u);
+});
+
+test("saving the same canonical suffix preserves accepted prefixes, while changing it clears them", async () => {
+  const initialSettings = {
+    version: 1,
+    publicKey: null,
+    suffix: "tailnet.example.net",
+    acceptedPrefixes: ["workstation"],
+  };
+  const ui = startApprovalUi({
+    initialSettings,
+    hash: "",
+    connectHandoff: async () => createSession(),
+  });
+  await settle();
+  ui.element("#dns-suffix").value = " TailNet.Example.Net ";
+  await ui.click("#save-settings");
+  await settle();
+  assert.deepEqual(ui.writes[0].acceptedPrefixes, ["workstation"]);
+  assert.equal(ui.confirmations.length, 0);
+
+  ui.element("#dns-suffix").value = "new.example.net";
+  await ui.click("#save-settings");
+  await settle();
+  assert.equal(ui.confirmations.length, 1);
+  assert.deepEqual(ui.writes[1].acceptedPrefixes, []);
+});
+
+test("replacing the saved public key requires confirmation and clears accepted prefixes", async () => {
+  const ui = startApprovalUi({
+    initialSettings: {
+      version: 1,
+      publicKey: "old-public-key",
+      suffix: "tailnet.example.net",
+      acceptedPrefixes: ["workstation"],
+    },
+    hash: "",
+    connectHandoff: async () => createSession(),
+  });
+  await settle();
+  ui.element("#public-key").value = "new-public-key";
+  await ui.click("#save-public-key");
+  await settle();
+  assert.equal(ui.confirmations.length, 1);
+  assert.equal(ui.writes[0].publicKey, "new-public-key");
+  assert.deepEqual(ui.writes[0].acceptedPrefixes, []);
+  assert.match(ui.element("#result").textContent, /does not enroll a passkey or change CLI trust/u);
+});
+
+test("successful passkey setup saves its exported public key and forgetting removes one prefix", async () => {
+  const ui = startApprovalUi({
+    initialSettings: {
+      version: 1,
+      publicKey: null,
+      suffix: "tailnet.example.net",
+      acceptedPrefixes: ["workstation", "laptop"],
+    },
+    hash: "",
+    createPasskey: async () => ({ publicKey: "exported-public-key", publicKeyAlgorithm: "ES256 (-7)" }),
+    connectHandoff: async () => createSession(),
+  });
+  await settle();
+
+  await ui.click("#create-passkey");
+  assert.equal(ui.writes[0].publicKey, "exported-public-key");
+  assert.deepEqual(ui.writes[0].acceptedPrefixes, ["workstation", "laptop"]);
+  assert.match(ui.element("#result").textContent, /public key is saved/u);
+
+  const forgetButton = ui.element("#accepted-prefixes").children[0].children[1];
+  assert.equal(forgetButton.disabled, false, "Forget is enabled after settings load");
+  await forgetButton.handlers.click();
+  await settle();
+  assert.deepEqual(ui.writes[1].acceptedPrefixes, ["laptop"]);
+});
+
+test("live approval freezes settings and keeps its displayed destination snapshot", async () => {
+  const session = createSession();
+  const ui = startApprovalUi({ connectHandoff: async () => session });
+  await settle();
+
+  assert.equal(ui.element("#settings-controls").disabled, true);
+  assert.equal(ui.element("#reset-settings").disabled, true);
+  ui.element("#dns-suffix").value = "other.example.net";
+  assert.equal(ui.element("#request-host").textContent, "workstation.tailnet.example.net:8443");
+  assert.equal(ui.element("#request-suffix").textContent, "tailnet.example.net");
+
+  await ui.click("#cancel-request");
+  assert.equal(ui.element("#settings-controls").disabled, false);
+});
+
+test("the static client persists only the bounded public settings record and uses no remote assets", () => {
   const html = readFileSync(new URL("../index.html", import.meta.url), "utf8");
   const stylesheet = readFileSync(new URL("../style.css", import.meta.url), "utf8");
-  const modules = ["encoding.mjs", "envelope.mjs", "main.mjs", "transport.mjs", "webauthn.mjs"]
+  const modules = ["encoding.mjs", "envelope.mjs", "main.mjs", "settings.mjs", "transport.mjs", "webauthn.mjs"]
     .map((name) => readFileSync(new URL(name, import.meta.url), "utf8"));
   const sources = [html, stylesheet, ...modules].join("\n");
 
-  assert.doesNotMatch(sources, /\b(?:localStorage|sessionStorage|indexedDB|serviceWorker)\b/u);
+  assert.match(modules[3], /creds\.settings\.v1/u);
+  assert.match(modules[3], /MAX_SETTINGS_BYTES\s*=\s*32\s*\*\s*1024/u);
+  assert.match(modules[3], /MAX_ACCEPTED_PREFIXES\s*=\s*128/u);
+  assert.doesNotMatch(sources, /\b(?:sessionStorage|indexedDB|serviceWorker|largeBlob)\b/iu);
   assert.doesNotMatch(sources, /document\s*\.\s*cookie/u);
   assert.doesNotMatch(html, /<(?:script|link)\b[^>]+https?:\/\//iu);
   assert.doesNotMatch(stylesheet, /@import\s+url\s*\(|url\s*\(\s*["']?https?:/iu);
@@ -258,6 +521,7 @@ test("the browser closes an established request when its two-minute approval win
   assert.equal(ui.element("#approve-request").disabled, true);
   assert.equal(ui.element("#cancel-request").disabled, true);
   assert.match(ui.element("#result").textContent, /approval window expired/u);
+  assert.equal(ui.element("#settings-controls").disabled, false);
 });
 
 test("approval expiry closes the session and clears the key while transmission is pending", async () => {
@@ -381,4 +645,17 @@ test("one explicit approval runs one ceremony and sends only on its live session
   assert.deepEqual(session.sent[0].key, new Uint8Array(32).fill(0x5a));
   assert.equal(key.every((byte) => byte === 0), true, "page clears its key reference after sending");
   assert.equal(ui.element("#cancel-request").disabled, true);
+});
+
+test("successful transmission restores settings after the session closes without a failure event", async () => {
+  const session = createSession();
+  session.sendKey = async () => { session.close(); };
+  const ui = startApprovalUi({ connectHandoff: async () => session });
+  await settle();
+
+  assert.equal(ui.element("#settings-controls").disabled, true);
+  await ui.click("#approve-request");
+
+  assert.equal(session.closed, true);
+  assert.equal(ui.element("#settings-controls").disabled, false);
 });

@@ -3,9 +3,8 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="creds-dns-suffix" content="tailnet.example.net">
     <meta name="referrer" content="no-referrer">
-    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; base-uri 'none'; form-action 'none'; img-src 'self' data:; script-src 'self'; style-src 'self'; connect-src 'self' https://*.tailnet.example.net:* https://*.localhost:* https://127.0.0.1:*; object-src 'none'">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; img-src 'self' data:; script-src 'self'; style-src 'self'; connect-src https:; object-src 'none'">
     <title>creds passkey setup and approval</title>
     <link rel="icon" type="image/svg+xml" href="favicon.svg">
     <link rel="stylesheet" href="style.css">
@@ -16,13 +15,15 @@
       <header>
         <p id="eyebrow" class="eyebrow">creds · passkey setup</p>
         <h1 id="page-title">Create a creds passkey</h1>
-        <p id="page-intro" class="intro">Create a discoverable ES256 passkey, confirm PRF support, and export its public key for local CLI setup. This page does not store passkeys or setup data.</p>
+        <p id="page-intro" class="intro">Create a discoverable ES256 passkey, confirm PRF support, and export its public key for local CLI setup. The browser can retain public settings on this origin.</p>
       </header>
 
       <section id="approval-panel" aria-labelledby="approval-title" hidden>
         <h2 id="approval-title">Review approval request</h2>
         <dl class="request-details">
           <div><dt>Destination</dt><dd id="request-host"></dd></div>
+          <div><dt>Machine prefix</dt><dd id="request-prefix"></dd></div>
+          <div><dt>DNS suffix</dt><dd id="request-suffix"></dd></div>
           <div><dt>Name</dt><dd id="request-name"></dd></div>
           <div><dt>Revision</dt><dd id="request-revision"></dd></div>
           <div><dt>Operation</dt><dd id="request-operation"></dd></div>
@@ -30,7 +31,22 @@
         <p>Check the destination and exact name before you continue. Approval requires passkey user verification.</p>
         <div class="actions">
           <button id="approve-request" type="button">Approve and verify</button>
+          <button id="retry-connection" class="secondary" type="button" hidden>Retry connection</button>
           <button id="cancel-request" class="secondary" type="button">Cancel</button>
+        </div>
+      </section>
+
+      <section id="destination-panel" aria-labelledby="destination-title" hidden>
+        <h2 id="destination-title">Accept this destination</h2>
+        <dl class="request-details">
+          <div><dt>Machine prefix</dt><dd id="destination-prefix"></dd></div>
+          <div><dt>DNS suffix</dt><dd id="destination-suffix"></dd></div>
+          <div><dt>Full destination</dt><dd id="destination-host"></dd></div>
+        </dl>
+        <p id="destination-note">Accepting remembers this prefix and suffix when browser storage is available. It does not approve a secret request.</p>
+        <div class="actions">
+          <button id="accept-destination" type="button" disabled>Accept this destination</button>
+          <button id="decline-destination" class="secondary" type="button" disabled>Cancel</button>
         </div>
       </section>
 
@@ -39,19 +55,39 @@
         <label for="passkey-label">Passkey label</label>
         <input id="passkey-label" type="text" value="creds passkey" maxlength="64" autocomplete="off">
         <button id="create-passkey" type="button">Create passkey and export public key</button>
-        <label for="public-key">Public key (base64url DER SPKI)</label>
-        <div class="actions">
-          <input id="public-key" type="text" autocomplete="off" spellcheck="false" readonly aria-describedby="public-key-help">
-          <button id="copy-public-key" class="secondary" type="button">Copy public key</button>
-        </div>
-        <p id="public-key-help">Save this public key for <code>creds setup</code>. It is public setup material. The matching private key stays with the passkey provider.</p>
+      </section>
+
+      <section id="settings-panel" aria-labelledby="settings-title">
+        <h2 id="settings-title">Browser settings</h2>
+        <p>These public settings belong to this browser profile and origin. The CLI still trusts only its independently configured public key.</p>
+        <fieldset id="settings-controls">
+          <label for="dns-suffix">Machine DNS suffix</label>
+          <input id="dns-suffix" type="text" autocomplete="off" spellcheck="false" placeholder="your-tailnet.ts.net" aria-describedby="suffix-help">
+          <p id="suffix-help">Enter a DNS suffix only. The app hostname and WebAuthn RP ID remain unchanged.</p>
+          <button id="save-settings" type="button">Save settings</button>
+
+          <label for="public-key">Public key (base64url DER SPKI)</label>
+          <input id="public-key" type="text" autocomplete="off" spellcheck="false" aria-describedby="public-key-help">
+          <div class="actions">
+            <button id="copy-public-key" class="secondary" type="button">Copy public key</button>
+            <button id="save-public-key" type="button">Save public key</button>
+          </div>
+          <p id="public-key-help">Save this public setup material for <code>creds setup</code>. Importing a key does not create a passkey or change CLI trust. The matching private key stays with the passkey provider.</p>
+
+          <h3>Accepted destinations</h3>
+          <p>Accepted prefixes apply only to the saved suffix. Every secret request still needs passkey approval.</p>
+          <ul id="accepted-prefixes" class="accepted-prefixes"></ul>
+          <p id="accepted-empty">No destinations are remembered.</p>
+        </fieldset>
+        <button id="reset-settings" class="secondary" type="button">Reset browser settings</button>
+        <p id="settings-status" role="status" aria-live="polite"></p>
       </section>
 
       <section class="result" aria-labelledby="result-title">
         <h2 id="result-title">Result</h2>
         <pre id="result" role="status" aria-live="polite">Ready. Create a passkey for local CLI setup or approve a CLI request.</pre>
       </section>
-      <footer id="page-footer">Passkeys stay with your authenticator or passkey provider. This page stores no application data.</footer>
+      <footer id="page-footer">Passkeys stay with your authenticator or passkey provider. The browser stores only the validated public key, DNS suffix, and accepted machine prefixes.</footer>
     </main>
   </body>
 </html>

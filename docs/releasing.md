@@ -34,13 +34,14 @@ creds-web-vX.Y.Z/
     encoding.mjs
     envelope.mjs
     main.mjs
+    settings.mjs
     transport.mjs
     webauthn.mjs
 ```
 
 Extract the versioned directory and serve its contents from the static site's document root. Keep the relative paths. The page supports a deployment path, such as `https://keys.example.com/creds/`, when its directory structure remains intact.
 
-The archive does not configure HTTP response headers. Serve `.mjs` files with `text/javascript` or `application/javascript`. Return 404 for missing modules. Set `X-Content-Type-Options: nosniff` and the CSP, `Referrer-Policy`, and other headers listed in the [deployment guide](deployment.md). Set the configured machine DNS suffix in the production page and matching `connect-src` policy before deployment.
+The archive does not configure HTTP response headers. Serve `.mjs` files with `text/javascript` or `application/javascript`. Return 404 for missing modules. Set `X-Content-Type-Options: nosniff` and the CSP, `Referrer-Policy`, and other headers listed in the [deployment guide](deployment.md). Users configure the machine DNS suffix in browser settings; do not edit the production page for each deployment suffix.
 
 ## Configure GitHub Actions
 

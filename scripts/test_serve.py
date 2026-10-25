@@ -1,3 +1,4 @@
+import re
 import unittest
 from functools import partial
 from http.server import ThreadingHTTPServer
@@ -40,18 +41,23 @@ class StaticServerTests(unittest.TestCase):
             page = response.read().decode("utf-8")
             csp = response.headers["Content-Security-Policy"]
 
+        meta_policy = re.search(r'<meta http-equiv="Content-Security-Policy" content="([^"]+)"', page)
+        self.assertIsNotNone(meta_policy)
+        self.assertEqual(meta_policy.group(1), csp)
         self.assertIn("default-src 'none'", csp)
         self.assertIn("frame-ancestors 'none'", csp)
         self.assertIn("script-src 'self'", csp)
         self.assertIn("style-src 'self'", csp)
         self.assertIn("object-src 'none'", csp)
+        self.assertIn("connect-src https:", csp)
+        self.assertIn("frame-ancestors 'none'", page)
         self.assertNotIn("'unsafe-inline'", csp)
         self.assertNotIn("'unsafe-eval'", csp)
         self.assertEqual(response.headers["X-Content-Type-Options"], "nosniff")
         self.assertEqual(response.headers["Referrer-Policy"], "no-referrer")
-        self.assertIn('<meta name="creds-dns-suffix" content="tailnet.example.net">', page)
-        self.assertIn("https://*.tailnet.example.net:*", page)
-        self.assertIn("https://*.tailnet.example.net:*", csp)
+        self.assertNotIn("creds-dns-suffix", page)
+        self.assertIn("connect-src https:", page)
+        self.assertNotIn("tailnet.example.net", csp)
 
         with urlopen(f"{self.base_url}/js/main.mjs") as module:
             self.assertEqual(module.status, 200)
@@ -59,6 +65,10 @@ class StaticServerTests(unittest.TestCase):
                 module.headers.get("Content-Type", "").startswith("text/javascript"),
                 module.headers.get("Content-Type"),
             )
+
+        with urlopen(f"{self.base_url}/js/settings.mjs") as module:
+            self.assertEqual(module.status, 200)
+            self.assertTrue(module.headers.get("Content-Type", "").startswith("text/javascript"))
 
     def test_missing_module_does_not_fall_back_to_html(self):
         with self.assertRaises(HTTPError) as raised:

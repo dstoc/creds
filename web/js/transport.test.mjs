@@ -3,6 +3,7 @@ import test from "node:test";
 
 import { decodeBase64Url, encodeBase64Url } from "./encoding.mjs";
 import {
+  buildHandoffDestination,
   connectHandoff,
   encodeFrame,
   parseHandoffFragment,
@@ -25,15 +26,22 @@ const requestBody = new TextEncoder().encode(JSON.stringify({
   approvalTimeoutMs: 120_000,
 }));
 
-test("handoff fragment combines the machine label with the configured suffix, independent of app hostname", () => {
-  const handoff = parseHandoffFragment(
+test("handoff parsing captures QR fields and builds a validated DNS destination separately", () => {
+  const parsed = parseHandoffFragment(
     `#v=1&host=workstation&port=8443&cert=${pinText}&request=${requestText}`,
     { protocol: "https:", hostname: "approval.example.com" },
-    "tailnet.example.net",
   );
+  const handoff = buildHandoffDestination(parsed, "tailnet.example.net");
   assert.equal(handoff.endpoint, "https://workstation.tailnet.example.net:8443/key");
   assert.equal(handoff.fullHostname, "workstation.tailnet.example.net");
   assert.deepEqual(handoff.certificatePin, decodeBase64Url(pinText));
+  const caseVariant = buildHandoffDestination(parseHandoffFragment(
+    `#v=1&host=WorkStation&port=8443&cert=${pinText}&request=${requestText}`,
+    { protocol: "https:", hostname: "approval.example.com" },
+  ), "TailNet.Example.Net");
+  assert.equal(caseVariant.prefix, "workstation");
+  assert.equal(caseVariant.suffix, "tailnet.example.net");
+  assert.equal(caseVariant.fullHostname, handoff.fullHostname);
 
   for (const fragment of [
     `#v=2&host=workstation&port=8443&cert=${pinText}&request=${requestText}`,
@@ -49,26 +57,18 @@ test("handoff fragment combines the machine label with the configured suffix, in
     assert.throws(() => parseHandoffFragment(
       fragment,
       { protocol: "https:", hostname: "approval.example.com" },
-      "tailnet.example.net",
     ));
   }
   assert.throws(() => parseHandoffFragment(
     `#v=1&host=workstation&port=8443&cert=${pinText}&request=${requestText}`,
     { protocol: "http:", hostname: "localhost" },
-    "localhost",
   ), /HTTPS/u);
-  assert.throws(() => parseHandoffFragment(
-    `#v=1&host=workstation&port=8443&cert=${pinText}&request=${requestText}`,
-    { protocol: "https:", hostname: "approval.example.com" },
-    "127.0.0.1",
-  ), /configured machine DNS suffix/u);
 
   for (const suffix of [
     "",
     ".tailnet.example",
     "tailnet..example",
     "tailnet.example.",
-    "Tailnet.example",
     "-tailnet.example",
     "tailnet-.example",
     "tailnet.example/path",
@@ -76,16 +76,16 @@ test("handoff fragment combines the machine label with the configured suffix, in
     "123.456.789.012",
     `${"a".repeat(63)}.${"b".repeat(63)}.${"c".repeat(63)}.${"d".repeat(63)}`,
   ]) {
-    assert.throws(() => parseHandoffFragment(
-      `#v=1&host=workstation&port=8443&cert=${pinText}&request=${requestText}`,
-      { protocol: "https:", hostname: "approval.example.com" },
-      suffix,
-    ), `accepted malformed machine DNS suffix ${JSON.stringify(suffix)}`);
+    assert.throws(() => buildHandoffDestination(parsed, suffix), `accepted malformed machine DNS suffix ${JSON.stringify(suffix)}`);
   }
 
-  assert.throws(() => parseHandoffFragment(
-    `#v=1&host=${"a".repeat(63)}&port=8443&cert=${pinText}&request=${requestText}`,
+  const longPrefix = "a".repeat(63);
+  const tooLongDestination = parseHandoffFragment(
+    `#v=1&host=${longPrefix}&port=8443&cert=${pinText}&request=${requestText}`,
     { protocol: "https:", hostname: "approval.example.com" },
+  );
+  assert.throws(() => buildHandoffDestination(
+    tooLongDestination,
     `${"b".repeat(63)}.${"c".repeat(63)}.${"d".repeat(63)}.e`,
   ), /hostname is too long/u);
 });
@@ -186,11 +186,10 @@ test("approval opens one stream with the exact certificate pin and handles split
   }
   globalThis.WebTransport = FakeWebTransport;
   try {
-    const handoff = parseHandoffFragment(
+    const handoff = buildHandoffDestination(parseHandoffFragment(
       `#v=1&host=workstation&port=8443&cert=${pinText}&request=${requestText}`,
       { protocol: "https:", hostname: "approval.example.com" },
-      "tailnet.example.net",
-    );
+    ), "tailnet.example.net");
     const session = await connectHandoff(handoff);
     assert.equal(endpoint, "https://workstation.tailnet.example.net:8443/key");
     assert.equal(session.request.name, "secret-x");

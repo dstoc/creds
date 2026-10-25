@@ -21,6 +21,7 @@ WEB_FILES = (
     "js/encoding.mjs",
     "js/envelope.mjs",
     "js/main.mjs",
+    "js/settings.mjs",
     "js/transport.mjs",
     "js/webauthn.mjs",
 )
