@@ -50,7 +50,7 @@ The label entered during CLI setup is one DNS label, such as `workstation`. The 
 
 ## Configure and use the CLI
 
-Create a discoverable ES256 passkey from Settings. The page confirms PRF support and saves the validated public key in browser settings. Settings shows a short key preview, a copy action, and a disclosure with the full unpadded base64url DER SubjectPublicKeyInfo. You can also import an existing public key. Copy it into the local setup prompt. The public key is not secret; the CLI retains its independently configured copy so it can verify future assertions. The matching private credential remains with the authenticator or passkey provider.
+On first visit, choose **Create passkey** or **Use existing passkey**. Creation confirms PRF support, exports a copyable public key, and gives `creds setup` instructions. Use the existing path when the CLI already trusts your passkey; it only needs the machine DNS suffix. Importing a public key is optional setup convenience. It does not enroll a key with the CLI or prove possession. Settings keeps a saved key's short preview, copy action, and full unpadded base64url DER SubjectPublicKeyInfo. The CLI retains its independently configured public key to verify future assertions. The matching private credential remains with the authenticator or passkey provider.
 
 You can download a versioned Linux x86_64 executable and verify its checksum. See [release operations](releasing.md) for the package name, compatibility requirements, and install layout. The archive contains the executable, license, and README. Put `creds` on your `PATH`, or run it from the extracted directory.
 

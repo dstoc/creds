@@ -40,6 +40,24 @@ const acceptDestinationButton = document.querySelector("#accept-destination");
 const declineDestinationButton = document.querySelector("#decline-destination");
 const retryConnectionButton = document.querySelector("#retry-connection");
 const createPasskeyButton = document.querySelector("#create-passkey");
+const setupCreatePasskeyButton = document.querySelector("#setup-create-passkey");
+const setupUseExistingButton = document.querySelector("#setup-use-existing");
+const setupBackButton = document.querySelector("#setup-back");
+const setupSaveSettingsButton = document.querySelector("#save-settings");
+const needsSettingsSaveButton = document.querySelector("#save-needs-settings");
+const setupSavePublicKeyButton = document.querySelector("#save-setup-public-key");
+const copySetupPublicKeyButton = document.querySelector("#copy-setup-public-key");
+const setupChoice = document.querySelector("#setup-choice");
+const setupFlow = document.querySelector("#setup-flow");
+const setupTitle = document.querySelector("#setup-title");
+const setupCreatedKey = document.querySelector("#setup-created-key");
+const setupExistingNote = document.querySelector("#setup-existing-note");
+const setupImportKey = document.querySelector("#setup-import-key");
+const setupPublicKey = document.querySelector("#setup-public-key");
+const setupPublicKeyInput = document.querySelector("#setup-public-key-input");
+const needsSettingsForm = document.querySelector("#needs-settings-form");
+const needsSettingsInvalid = document.querySelector("#needs-settings-invalid");
+const needsSettingsSuffixInput = document.querySelector("#needs-settings-suffix");
 const resetSettingsButton = document.querySelector("#reset-settings");
 const passkeyLabelInput = document.querySelector("#passkey-label");
 const publicKeyInput = document.querySelector("#public-key");
@@ -72,6 +90,9 @@ let requestGeneration = 0;
 let destinationNotice = "";
 let activeView = "setup";
 let returnView = "ready";
+let setupMode = "choice";
+let createdSetupPublicKey = null;
+let setupPasskeyCreating = false;
 const viewMessages = Object.fromEntries(Object.keys(statusSelectors).map((view) => [view, ""]));
 const viewErrors = Object.fromEntries(Object.keys(statusSelectors).map((view) => [view, false]));
 
@@ -123,6 +144,20 @@ function showView(view, { focus = true } = {}) {
   if (focus && heading) heading.focus();
 }
 
+function showSetupMode(mode, { focus = true } = {}) {
+  setupMode = mode;
+  setupChoice.hidden = mode !== "choice";
+  setupFlow.hidden = mode === "choice";
+  setupCreatedKey.hidden = mode !== "created";
+  setupExistingNote.hidden = mode !== "existing";
+  setupImportKey.hidden = mode !== "existing";
+  if (mode !== "existing") setupImportKey.open = false;
+  setupTitle.textContent = mode === "created" ? "Create passkey"
+    : mode === "existing" ? "Use existing passkey"
+      : "Set up this browser";
+  if (focus && activeView === "setup") setupTitle.focus();
+}
+
 function showOutcome(message, { error = false } = {}) {
   outcomeMessage.textContent = message;
   outcomeMessage.className = error ? "error" : "";
@@ -160,6 +195,13 @@ function setSettingsEditable(editable) {
   settingsControls.disabled = !enabled;
   suffixInput.disabled = !enabled;
   settingsSuffixInput.disabled = !enabled;
+  needsSettingsSuffixInput.disabled = !enabled;
+  setupCreatePasskeyButton.disabled = !enabled || setupPasskeyCreating;
+  setupUseExistingButton.disabled = !enabled || setupPasskeyCreating;
+  setupBackButton.disabled = !enabled || setupPasskeyCreating;
+  setupSaveSettingsButton.disabled = !enabled;
+  needsSettingsSaveButton.disabled = !enabled;
+  setupSavePublicKeyButton.disabled = !enabled;
   createPasskeyButton.disabled = !enabled;
   resetSettingsButton.disabled = !editable;
 }
@@ -192,6 +234,7 @@ function updateDisplayedSettings({ syncInputs = false } = {}) {
   if (syncInputs) {
     suffixInput.value = settings.suffix;
     settingsSuffixInput.value = settings.suffix;
+    needsSettingsSuffixInput.value = settings.suffix;
     publicKeyInput.value = settings.publicKey ?? "";
   }
   const hasKey = Boolean(settings.publicKey);
@@ -260,8 +303,11 @@ async function writeSettings(next, options = {}) {
 async function preparePendingHandoff() {
   if (!pendingHandoff || approvalCancelled || settingsInvalid) return;
   if (!settings.suffix) {
+    needsSettingsForm.hidden = false;
+    needsSettingsInvalid.hidden = true;
+    needsSettingsSuffixInput.value = settings.suffix;
     showView("needsSettings");
-    show("Save a machine DNS suffix to continue this request. The handoff stays in this page until then.");
+    show("The handoff stays in this page while you save the suffix.");
     updateDestinationControls();
     return;
   }
@@ -389,7 +435,9 @@ async function beginConnection() {
 async function saveSuffix() {
   if (settingsInvalid || settingsSaving || connectionInProgress || approvalSession?.isActive()) return;
   const startedInSetup = activeView === "setup";
-  const input = activeView === "settings" ? settingsSuffixInput : suffixInput;
+  const input = activeView === "settings" ? settingsSuffixInput
+    : activeView === "needsSettings" ? needsSettingsSuffixInput
+      : suffixInput;
   let suffix;
   try {
     suffix = input.value.trim() === "" ? "" : normalizeSuffix(input.value);
@@ -430,7 +478,7 @@ async function savePublicKey(value, { created = false } = {}) {
     const replacing = settings.publicKey !== null && settings.publicKey !== publicKey;
     if (replacing && !confirm("Replacing the saved public key clears all accepted destinations. Save this public setup key? The CLI trust configuration will not change.")) {
       if (created) show("Passkey created and public key exported, but the saved browser key was not replaced.");
-      return;
+      return false;
     }
     const next = {
       ...settings,
@@ -445,13 +493,53 @@ async function savePublicKey(value, { created = false } = {}) {
     });
     show(storageAvailable
       ? created
-        ? "Passkey created, PRF confirmed, and public key saved. Copy it from Settings for creds setup."
-        : "Public key validated and saved for future CLI setup. Import does not enroll a passkey or change CLI trust."
+        ? "Passkey created, PRF confirmed, and public key saved."
+        : "Public key validated and saved for setup convenience. Import does not enroll a key with the CLI or prove possession."
       : "Settings could not be saved; the validated public key applies to this page only.", { error: !storageAvailable });
+    return true;
   } finally {
     settingsSaving = false;
     updateDisplayedSettings();
     updateDestinationControls();
+  }
+}
+
+async function createSetupPasskey() {
+  if (setupPasskeyCreating || settingsInvalid || settingsSaving) return;
+  setupPasskeyCreating = true;
+  setSettingsEditable(!connectionInProgress && !approvalSession?.isActive());
+  show("Waiting for passkey creation and PRF confirmation…");
+  try {
+    const created = await createPasskey(passkeyLabelInput.value);
+    createdSetupPublicKey = created.publicKey;
+    setupPublicKey.value = created.publicKey;
+    const saved = await savePublicKey(created.publicKey, { created: true });
+    showSetupMode("created");
+    show(saved
+      ? storageAvailable ? "" : "The exported key is available for this page only; browser settings could not be saved."
+      : "The saved browser key was kept. The exported key below is available if you want to configure the CLI with the new passkey.",
+      { error: !saved || !storageAvailable });
+  } catch (error) {
+    show(`${error instanceof Error ? `${error.name}: ${error.message}` : String(error)}`, { error: true });
+  } finally {
+    setupPasskeyCreating = false;
+    setSettingsEditable(!connectionInProgress && !approvalSession?.isActive());
+    if (activeView === "setup" && setupMode === "choice") setupCreatePasskeyButton.focus();
+  }
+}
+
+async function copySetupPublicKey() {
+  if (!createdSetupPublicKey) {
+    show("Create a passkey first to export its public key.");
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(createdSetupPublicKey);
+    show("Public key copied. Run creds setup to configure the CLI.");
+  } catch (error) {
+    setupPublicKey.focus();
+    setupPublicKey.select();
+    show(`Clipboard access failed: ${error instanceof Error ? error.message : String(error)}. Select and copy the exported public key.`, { error: true });
   }
 }
 
@@ -532,8 +620,16 @@ async function startApp() {
     settingsControls.disabled = true;
     suffixInput.disabled = true;
     settingsSuffixInput.disabled = true;
+    needsSettingsSuffixInput.disabled = true;
+    setupCreatePasskeyButton.disabled = true;
+    setupUseExistingButton.disabled = true;
+    setupSaveSettingsButton.disabled = true;
+    needsSettingsSaveButton.disabled = true;
+    setupSavePublicKeyButton.disabled = true;
     createPasskeyButton.disabled = true;
     resetSettingsButton.disabled = false;
+    needsSettingsForm.hidden = true;
+    needsSettingsInvalid.hidden = false;
     setSettingsStatus("Stored browser settings need an explicit reset before saving or connecting.", { error: true });
   } else {
     settings = loaded.settings;
@@ -547,6 +643,7 @@ async function startApp() {
   }
 
   if (!startupFragment) {
+    showSetupMode("choice", { focus: false });
     showView(settings.suffix && !settingsInvalid ? "ready" : "setup");
     if (settingsInvalid) show("Stored browser settings need an explicit reset in Settings.", { error: true });
     return;
@@ -560,6 +657,8 @@ async function startApp() {
     return;
   }
   if (settingsInvalid) {
+    needsSettingsForm.hidden = true;
+    needsSettingsInvalid.hidden = false;
     showView("needsSettings");
     show("Stored browser settings need an explicit reset in Settings. The request link was removed and is not stored.", { error: true });
     return;
@@ -580,7 +679,19 @@ document.querySelectorAll("[data-open-settings]").forEach((link) => link.addEven
   updateDisplayedSettings();
 }));
 doneSettingsButton.addEventListener("click", () => showView(returnView));
-document.querySelector("#save-settings").addEventListener("click", () => { void saveSuffix(); });
+setupCreatePasskeyButton.addEventListener("click", () => { void createSetupPasskey(); });
+setupUseExistingButton.addEventListener("click", () => {
+  suffixInput.value = settings.suffix;
+  setupPublicKeyInput.value = "";
+  showSetupMode("existing");
+});
+setupBackButton.addEventListener("click", () => {
+  showIn("setup", "");
+  showSetupMode("choice");
+});
+setupSaveSettingsButton.addEventListener("click", () => { void saveSuffix(); });
+needsSettingsSaveButton.addEventListener("click", () => { void saveSuffix(); });
+copySetupPublicKeyButton.addEventListener("click", () => { void copySetupPublicKey(); });
 document.querySelector("#save-settings-from-page").addEventListener("click", () => { void saveSuffix(); });
 
 createPasskeyButton.addEventListener("click", async (event) => {
@@ -615,10 +726,14 @@ document.querySelector("#copy-public-key").addEventListener("click", async () =>
 document.querySelector("#save-public-key").addEventListener("click", () => {
   void savePublicKey(publicKeyInput.value).catch((error) => show(`Public key was not saved: ${error instanceof Error ? error.message : String(error)}`, { error: true }));
 });
+setupSavePublicKeyButton.addEventListener("click", () => {
+  void savePublicKey(setupPublicKeyInput.value).catch((error) => show(`Public key was not saved: ${error instanceof Error ? error.message : String(error)}`, { error: true }));
+});
 acceptDestinationButton.addEventListener("click", () => { void acceptDestination(); });
 declineDestinationButton.addEventListener("click", cancelRequest);
 cancelButton.addEventListener("click", cancelRequest);
 document.querySelector("#cancel-needs-settings").addEventListener("click", cancelRequest);
+document.querySelector("#cancel-invalid-settings").addEventListener("click", cancelRequest);
 retryConnectionButton.addEventListener("click", () => { void preparePendingHandoff(); });
 document.querySelector("#outcome-done").addEventListener("click", finishOutcome);
 

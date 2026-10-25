@@ -59,6 +59,7 @@ function startApprovalUi({
   const historyCalls = [];
   const confirmations = [];
   const writes = [];
+  const clipboardWrites = [];
   const timers = new Map();
   let nextTimerId = 1;
   const setTimeout = (callback, delay) => {
@@ -103,7 +104,7 @@ function startApprovalUi({
     setTimeout,
     clearTimeout,
     confirm: (message) => { confirmations.push(message); return confirmAnswer; },
-    navigator: { clipboard: { async writeText() {} } },
+    navigator: { clipboard: { async writeText(value) { clipboardWrites.push(value); } } },
     emptySettings: () => ({ version: 1, publicKey: null, suffix: "", acceptedPrefixes: [] }),
     loadSettings: async () => ({ status: loadStatus, settings: structuredClone(initialSettings), error: null }),
     saveSettings: async (value) => {
@@ -145,6 +146,7 @@ function startApprovalUi({
     historyCalls,
     confirmations,
     writes,
+    clipboardWrites,
     timerDelays: () => [...timers.values()].map(({ delay }) => delay),
     fireTimers() {
       const pending = [...timers.values()];
@@ -165,27 +167,129 @@ async function settle() {
   await new Promise((resolve) => setImmediate(resolve));
 }
 
-test("first-time setup and returning ready each show one focused view", async () => {
+test("first-time setup offers an existing-passkey path without requiring a saved public key", async () => {
+  let creations = 0;
   const ui = startApprovalUi({
     hash: "",
     initialSettings: { version: 1, publicKey: null, suffix: "", acceptedPrefixes: [] },
     connectHandoff: async () => createSession(),
+    createPasskey: async () => {
+      creations += 1;
+      return { publicKey: "new-public-key", publicKeyAlgorithm: "ES256 (-7)" };
+    },
   });
   await settle();
 
   assert.equal(ui.element("#setup-panel").hidden, false);
   assert.equal(ui.element("#ready-panel").hidden, true);
+  assert.equal(ui.element("#setup-choice").hidden, false);
+  assert.equal(ui.element("#setup-flow").hidden, true);
+  await ui.click("#setup-use-existing");
+  assert.equal(ui.element("#setup-existing-note").hidden, false);
+  assert.equal(ui.element("#setup-import-key").hidden, false);
+  assert.equal(ui.element("#setup-created-key").hidden, true);
+  assert.equal(creations, 0);
+
   ui.element("#dns-suffix").value = " TailNet.Example.Net ";
   await ui.click("#save-settings");
   await settle();
 
   assert.equal(ui.writes[0].suffix, "tailnet.example.net");
+  assert.equal(ui.writes[0].publicKey, null);
+  assert.equal(creations, 0);
   assert.equal(ui.element("#setup-panel").hidden, true);
   assert.equal(ui.element("#ready-panel").hidden, false);
   assert.equal(ui.element("#settings-link").hidden, false);
 });
 
-test("approval stays disabled until the pinned request is displayed", async () => {
+test("existing-passkey setup permits optional public-key import without creating a key", async () => {
+  let creations = 0;
+  const ui = startApprovalUi({
+    hash: "",
+    initialSettings: { version: 1, publicKey: null, suffix: "", acceptedPrefixes: [] },
+    connectHandoff: async () => createSession(),
+    createPasskey: async () => {
+      creations += 1;
+      return { publicKey: "unexpected-key", publicKeyAlgorithm: "ES256 (-7)" };
+    },
+  });
+  await settle();
+
+  await ui.click("#setup-use-existing");
+  assert.equal(ui.element("#setup-import-key").hidden, false);
+  ui.element("#setup-public-key-input").value = "saved-public-key";
+  await ui.click("#save-setup-public-key");
+  await settle();
+  assert.equal(ui.writes[0].publicKey, "saved-public-key");
+  assert.match(ui.element("#result").textContent, /does not enroll a key with the CLI or prove possession/u);
+  assert.equal(creations, 0);
+
+  ui.element("#dns-suffix").value = "tailnet.example.net";
+  await ui.click("#save-settings");
+  await settle();
+  assert.equal(ui.writes[1].suffix, "tailnet.example.net");
+  assert.equal(creations, 0);
+});
+
+test("create-passkey setup confirms PRF, shows the exported key, and supports copy and suffix setup", async () => {
+  let creations = 0;
+  const ui = startApprovalUi({
+    hash: "",
+    initialSettings: { version: 1, publicKey: null, suffix: "", acceptedPrefixes: [] },
+    connectHandoff: async () => createSession(),
+    createPasskey: async () => {
+      creations += 1;
+      return { publicKey: "exported-setup-key", publicKeyAlgorithm: "ES256 (-7)" };
+    },
+  });
+  await settle();
+
+  await ui.click("#setup-create-passkey");
+  await settle();
+  assert.equal(creations, 1);
+  assert.equal(ui.element("#setup-created-key").hidden, false);
+  assert.equal(ui.element("#setup-public-key").value, "exported-setup-key");
+  assert.equal(ui.element("#result").textContent, "");
+  assert.equal(ui.writes[0].publicKey, "exported-setup-key");
+  const html = readFileSync(new URL("../index.html", import.meta.url), "utf8");
+  assert.match(html, /Run <code>creds setup<\/code> and paste this key/u);
+
+  await ui.click("#copy-setup-public-key");
+  await settle();
+  assert.deepEqual(ui.clipboardWrites, ["exported-setup-key"]);
+  assert.match(ui.element("#result").textContent, /copied/u);
+
+  ui.element("#dns-suffix").value = " TailNet.Example.Net ";
+  await ui.click("#save-settings");
+  await settle();
+  assert.equal(ui.writes[1].suffix, "tailnet.example.net");
+  assert.equal(ui.element("#ready-panel").hidden, false);
+});
+
+test("cancelled passkey creation reports the failure and leaves existing setup available", async () => {
+  const ui = startApprovalUi({
+    hash: "",
+    initialSettings: { version: 1, publicKey: null, suffix: "", acceptedPrefixes: [] },
+    connectHandoff: async () => createSession(),
+    createPasskey: async () => { throw new DOMException("The user cancelled.", "NotAllowedError"); },
+  });
+  await settle();
+
+  await ui.click("#setup-create-passkey");
+  await settle();
+  assert.equal(ui.element("#setup-choice").hidden, false);
+  assert.equal(ui.element("#setup-flow").hidden, true);
+  assert.match(ui.element("#result").textContent, /NotAllowedError/u);
+  assert.equal(ui.writes.length, 0);
+
+  await ui.click("#setup-use-existing");
+  ui.element("#dns-suffix").value = "tailnet.example.net";
+  await ui.click("#save-settings");
+  await settle();
+  assert.equal(ui.element("#ready-panel").hidden, false);
+});
+
+test("a configured CLI request proceeds without a saved browser public key", async () => {
   let resolveConnection;
   const connectionReady = new Promise((resolve) => { resolveConnection = resolve; });
   const ui = startApprovalUi({ connectHandoff: () => connectionReady });
@@ -262,26 +366,39 @@ test("declining an unfamiliar destination neither connects nor saves an acceptan
   assert.match(ui.element("#outcome-message").textContent, /No key was sent/u);
 });
 
-test("missing suffix keeps the handoff in memory until settings are saved", async () => {
+test("missing-suffix handoff asks only for the suffix and resumes after it is saved", async () => {
   let connections = 0;
+  let creations = 0;
   const ui = startApprovalUi({
     initialSettings: { version: 1, publicKey: null, suffix: "", acceptedPrefixes: [] },
     connectHandoff: async () => { connections += 1; return createSession(); },
+    createPasskey: async () => {
+      creations += 1;
+      return { publicKey: "new-public-key", publicKeyAlgorithm: "ES256 (-7)" };
+    },
   });
   await settle();
   assert.equal(connections, 0);
+  assert.equal(creations, 0);
   assert.deepEqual(ui.historyCalls, [[null, "", "/"]]);
   assert.equal(ui.element("#needs-settings-panel").hidden, false);
-  assert.match(ui.element("#needs-settings-status").textContent, /Save a machine DNS suffix/u);
+  assert.equal(ui.element("#needs-settings-form").hidden, false);
+  assert.equal(ui.element("#needs-settings-invalid").hidden, true);
+  assert.match(ui.element("#needs-settings-status").textContent, /handoff stays in this page/u);
 
-  await ui.click("#settings-link");
-  ui.element("#dns-suffix-settings").value = " TailNet.Example.Net ";
-  await ui.click("#save-settings-from-page");
+  ui.element("#needs-settings-suffix").value = " TailNet.Example.Net ";
+  await ui.click("#save-needs-settings");
   await settle();
   assert.equal(ui.writes[0].suffix, "tailnet.example.net");
-  assert.equal(connections, 0, "saving the suffix does not accept a new destination");
+  assert.equal(creations, 0);
+  assert.equal(connections, 0, "saving the suffix resumes at the separate destination decision");
   assert.equal(ui.element("#destination-panel").hidden, false);
   assert.equal(ui.element("#destination-host").textContent, "workstation.tailnet.example.net:8443");
+
+  await ui.click("#accept-destination");
+  await settle();
+  assert.equal(connections, 1);
+  assert.equal(ui.element("#approve-request").disabled, false);
 });
 
 test("malformed stored settings block handoff until the user confirms reset", async () => {
@@ -294,6 +411,8 @@ test("malformed stored settings block handoff until the user confirms reset", as
   assert.equal(connections, 0);
   assert.equal(ui.element("#settings-controls").disabled, true);
   assert.equal(ui.element("#reset-settings").disabled, false);
+  assert.equal(ui.element("#needs-settings-form").hidden, true);
+  assert.equal(ui.element("#needs-settings-invalid").hidden, false);
   assert.match(ui.element("#needs-settings-status").textContent, /explicit reset/u);
 
   await ui.click("#reset-settings");
@@ -301,7 +420,7 @@ test("malformed stored settings block handoff until the user confirms reset", as
   assert.equal(ui.confirmations.length, 1);
   assert.equal(ui.element("#settings-controls").disabled, false);
   assert.equal(connections, 0);
-  assert.match(ui.element("#needs-settings-status").textContent, /machine DNS suffix/u);
+  assert.match(ui.element("#needs-settings-status").textContent, /save the suffix/u);
 });
 
 test("storage write failure accepts only in page memory and does not claim the destination was remembered", async () => {
@@ -387,7 +506,7 @@ test("replacing the saved public key requires confirmation and clears accepted p
   assert.equal(ui.confirmations.length, 1);
   assert.equal(ui.writes[0].publicKey, "new-public-key");
   assert.deepEqual(ui.writes[0].acceptedPrefixes, []);
-  assert.match(ui.element("#settings-status").textContent, /does not enroll a passkey or change CLI trust/u);
+  assert.match(ui.element("#settings-status").textContent, /does not enroll a key with the CLI or prove possession/u);
 });
 
 test("successful passkey setup saves its exported public key and forgetting removes one prefix", async () => {

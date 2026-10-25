@@ -132,6 +132,9 @@ textarea {
   line-height: 1.5;
   overflow-wrap: anywhere;
 }
+.key-copy { color: var(--muted); }
+.field .button { margin-top: 10px; }
+#setup-flow > details { margin-top: 22px; border-top: 1px solid var(--line); }
 .request-details { margin: 0; border-top: 1px solid var(--line); }
 summary { min-height: 48px; padding: 14px 2px 10px; color: var(--green); cursor: pointer; font-size: 14px; font-weight: 650; }
 summary::marker { color: var(--green); }
