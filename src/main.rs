@@ -313,6 +313,12 @@ fn file_error(action: &str, path: &Path, error: impl Error + 'static) -> CliErro
             format!("Cannot read input file at {path}; check that the file exists"),
             error,
         ),
+        Some(io::ErrorKind::NotFound) if action.starts_with("read existing envelope") => {
+            CliError::with_source(
+                format!("Cannot {action} at {path}; check that the file exists"),
+                error,
+            )
+        }
         _ => CliError::with_source(format!("Cannot {action} at {path}"), error),
     }
 }
@@ -341,13 +347,21 @@ fn secret_store_error(name: &str, storage_dir: &Path, action: &str, error: Store
                 path.display()
             ))
         }
+        StoreError::IoAt {
+            action,
+            path,
+            source,
+        } => file_error(&action, &path, source),
         StoreError::Io(error) => {
-            let error_path = if action == "prepare" {
-                storage_dir.join(format!("{name}.lock"))
+            if action == "prepare" {
+                file_error(
+                    &format!("prepare secret {name:?} in storage directory"),
+                    storage_dir,
+                    error,
+                )
             } else {
-                path
-            };
-            file_error(&format!("{action} secret {name:?}"), &error_path, error)
+                file_error(&format!("{action} secret {name:?}"), &path, error)
+            }
         }
         StoreError::Envelope(error) => CliError::with_source(
             format!("Cannot {action} secret {name:?} at {}", path.display()),

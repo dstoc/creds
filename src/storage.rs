@@ -18,6 +18,11 @@ pub enum StoreError {
     Busy(String),
     RevisionOverflow,
     Io(io::Error),
+    IoAt {
+        action: String,
+        path: PathBuf,
+        source: io::Error,
+    },
     Envelope(EnvelopeError),
     PublishedButDurabilityUncertain(io::Error),
 }
@@ -32,6 +37,11 @@ impl fmt::Display for StoreError {
                 formatter.write_str("secret revision is at the maximum value")
             }
             Self::Io(error) => write!(formatter, "storage I/O failed: {error}"),
+            Self::IoAt {
+                action,
+                path,
+                source,
+            } => write!(formatter, "{action} at {}: {source}", path.display()),
             Self::Envelope(error) => write!(formatter, "invalid secret envelope: {error}"),
             Self::PublishedButDurabilityUncertain(error) => write!(
                 formatter,
@@ -44,7 +54,9 @@ impl fmt::Display for StoreError {
 impl Error for StoreError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
-            Self::Io(error) | Self::PublishedButDurabilityUncertain(error) => Some(error),
+            Self::Io(error)
+            | Self::PublishedButDurabilityUncertain(error)
+            | Self::IoAt { source: error, .. } => Some(error),
             Self::Envelope(error) => Some(error),
             Self::Busy(_) | Self::RevisionOverflow => None,
         }
@@ -96,25 +108,45 @@ impl SecretWriter {
             StoreError::Envelope(EnvelopeError::from_message(error.to_string()))
         })?;
         if !storage_dir.is_dir() {
-            return Err(io::Error::new(
-                io::ErrorKind::NotFound,
-                "storage directory is not available",
-            )
-            .into());
+            return Err(StoreError::IoAt {
+                action: "access storage directory".to_owned(),
+                path: storage_dir.to_path_buf(),
+                source: io::Error::new(
+                    io::ErrorKind::NotFound,
+                    "storage directory is not available",
+                ),
+            });
         }
         let lock_path = storage_dir.join(format!("{name}.lock"));
-        let lock = open_lock_file(&lock_path)?;
+        let lock = open_lock_file(&lock_path).map_err(|source| StoreError::IoAt {
+            action: format!("open lock file for secret {name:?}"),
+            path: lock_path.clone(),
+            source,
+        })?;
         match lock.try_lock_exclusive() {
             Ok(()) => {}
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
                 return Err(StoreError::Busy(name.to_owned()));
             }
-            Err(error) => return Err(error.into()),
+            Err(source) => {
+                return Err(StoreError::IoAt {
+                    action: format!("lock secret {name:?}"),
+                    path: lock_path,
+                    source,
+                });
+            }
         }
 
         let current_path = storage_dir.join(format!("{name}.json"));
         let revision = if current_path.exists() {
-            let existing = read_envelope(&current_path, name)?;
+            let existing = read_envelope(&current_path, name).map_err(|error| match error {
+                StoreError::Io(source) => StoreError::IoAt {
+                    action: format!("read existing envelope for secret {name:?}"),
+                    path: current_path.clone(),
+                    source,
+                },
+                error => error,
+            })?;
             existing
                 .revision()
                 .checked_add(1)

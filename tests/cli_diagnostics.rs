@@ -159,6 +159,75 @@ fn malformed_envelope_and_busy_lock_fail_with_secret_context() {
     assert!(stderr.contains("synthetic-secret.lock"));
 }
 
+#[test]
+fn existing_envelope_read_failure_reports_the_envelope_path() {
+    let directory = ScratchDirectory::new();
+    let config = ValidConfig::new(&directory);
+    let envelope = config.storage.join("synthetic-secret.json");
+    let lock_path = config.storage.join("synthetic-secret.lock");
+    fs::create_dir(&envelope).expect("create synthetic envelope directory");
+    let input = directory.path().join("input.bin");
+    fs::write(&input, b"synthetic plaintext").expect("write synthetic input");
+
+    let output = run(&[
+        "--config",
+        config.config.to_str().unwrap(),
+        "encrypt",
+        "synthetic-secret",
+        input.to_str().unwrap(),
+    ]);
+    let stderr = assert_plain_failure(&output);
+    assert!(
+        stderr.contains(&format!(
+            "Cannot read existing envelope for secret \"synthetic-secret\" at {}",
+            envelope.display()
+        )),
+        "{stderr}"
+    );
+    assert!(stderr.contains("Is a directory"), "{stderr}");
+    assert!(
+        !stderr.contains(&lock_path.display().to_string()),
+        "{stderr}"
+    );
+    assert!(
+        fs::metadata(lock_path)
+            .expect("lock file was created before reading the envelope")
+            .is_file()
+    );
+}
+
+#[test]
+fn lock_file_open_failure_reports_the_lock_path() {
+    let directory = ScratchDirectory::new();
+    let config = ValidConfig::new(&directory);
+    let lock_path = config.storage.join("synthetic-secret.lock");
+    let envelope = config.storage.join("synthetic-secret.json");
+    fs::create_dir(&lock_path).expect("create synthetic lock path directory");
+    let input = directory.path().join("input.bin");
+    fs::write(&input, b"synthetic plaintext").expect("write synthetic input");
+
+    let output = run(&[
+        "--config",
+        config.config.to_str().unwrap(),
+        "encrypt",
+        "synthetic-secret",
+        input.to_str().unwrap(),
+    ]);
+    let stderr = assert_plain_failure(&output);
+    assert!(
+        stderr.contains(&format!(
+            "Cannot open lock file for secret \"synthetic-secret\" at {}",
+            lock_path.display()
+        )),
+        "{stderr}"
+    );
+    assert!(stderr.contains("Is a directory"), "{stderr}");
+    assert!(
+        !stderr.contains(&envelope.display().to_string()),
+        "{stderr}"
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn unreadable_config_error_names_the_path() {
