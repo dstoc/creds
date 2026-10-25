@@ -133,6 +133,28 @@ fn resolve_storage(path: &Path, config_path: &Path) -> Result<PathBuf> {
     Ok(resolved)
 }
 
+fn validate_storage_path(path: &Path) -> std::result::Result<(), String> {
+    let mut current = Some(path);
+    while let Some(candidate) = current {
+        match fs::metadata(candidate) {
+            Ok(metadata) if metadata.is_dir() => return Ok(()),
+            Ok(_) => {
+                return Err(format!(
+                    "{} exists and is not a directory",
+                    candidate.display()
+                ));
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                current = candidate.parent();
+            }
+            Err(error) => {
+                return Err(format!("cannot inspect {}: {error}", candidate.display()));
+            }
+        }
+    }
+    Ok(())
+}
+
 fn validate_hostname_label(hostname: &str) -> Result<()> {
     let valid = !hostname.is_empty()
         && hostname.len() <= 63
@@ -276,21 +298,24 @@ pub fn load(path: &Path) -> Result<ValidatedConfig> {
     validate_values(&path, values, true)
 }
 
-pub fn check(path: &Path) -> Result<()> {
+pub fn check(path: &Path, details: bool) -> Result<()> {
     let validated = load(path)?;
-    println!("Config: {}", validated.config_path.display());
-    println!("Storage: {}", validated.storage_dir.display());
-    println!("App origin: {}", validated.app_origin);
-    println!("RP ID: {}", validated.rp_id);
-    println!("Advertised hostname: {}", validated.hostname);
-    println!("Listener: {}", validated.listen_addr);
-    println!(
-        "Public-key fingerprint: {}",
-        validated.public_key_fingerprint
-    );
-    println!(
-        "Local setup is valid. This check does not test passkey possession, network reachability, browser compatibility, or secret decryptability."
-    );
+    println!("Local setup is valid.");
+    if details {
+        println!("Configuration: {}", validated.config_path.display());
+        println!("Storage: {}", validated.storage_dir.display());
+        println!("App origin: {}", validated.app_origin);
+        println!("RP ID: {}", validated.rp_id);
+        println!("Machine label: {}", validated.hostname);
+        println!("UDP listener: {}", validated.listen_addr);
+        println!(
+            "Pinned public-key fingerprint: {}",
+            validated.public_key_fingerprint
+        );
+        println!(
+            "This local check does not prove passkey possession, network reachability, or secret decryptability."
+        );
+    }
     Ok(())
 }
 
@@ -301,22 +326,46 @@ fn prompt(label: &str, default: Option<&str>) -> Result<String> {
     }
     io::stderr().flush()?;
     let mut input = String::new();
-    io::stdin().read_line(&mut input)?;
-    let input = input.trim_end_matches(['\r', '\n']);
+    if io::stdin().read_line(&mut input)? == 0 {
+        return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "input ended").into());
+    }
+    let input = input.trim();
     if input.is_empty() {
-        return default
-            .map(str::to_owned)
-            .ok_or_else(|| invalid(format!("{label} is required")).into());
+        return Ok(default.unwrap_or_default().to_owned());
     }
     Ok(input.to_owned())
 }
 
+fn prompt_validated(
+    label: &str,
+    default: Option<&str>,
+    validate: impl Fn(&str) -> std::result::Result<(), String>,
+) -> Result<String> {
+    loop {
+        let value = prompt(label, default)?;
+        let result = if value.is_empty() {
+            Err("a value is required".to_owned())
+        } else {
+            validate(&value)
+        };
+        match result {
+            Ok(()) => return Ok(value),
+            Err(error) => eprintln!("Invalid {label}: {error}. Try again."),
+        }
+    }
+}
+
 fn confirm(label: &str) -> Result<bool> {
-    eprint!("{label} Type yes to continue: ");
+    eprint!("{label} [y/N]: ");
     io::stderr().flush()?;
     let mut answer = String::new();
-    io::stdin().read_line(&mut answer)?;
-    Ok(answer.trim() == "yes")
+    if io::stdin().read_line(&mut answer)? == 0 {
+        return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "input ended").into());
+    }
+    Ok(matches!(
+        answer.trim().to_ascii_lowercase().as_str(),
+        "y" | "yes"
+    ))
 }
 
 #[cfg(unix)]
@@ -470,38 +519,58 @@ pub fn setup(path: &Path) -> Result<()> {
     let replace = path.exists();
     if replace
         && !confirm(&format!(
-            "Configuration {} already exists. Replace it?",
+            "Configuration {} exists. Replace it?",
             path.display()
         ))?
     {
-        return Err(invalid("setup cancelled; existing configuration was not changed").into());
+        return Err(invalid("Setup cancelled; existing configuration was not changed").into());
     }
 
     let default_storage = default_storage_path()?;
     let mut values = ConfigValues {
-        app_url: prompt("Trusted app HTTPS URL", None)?,
-        hostname: prompt("Single DNS label for this machine", Some("workstation"))?,
-        storage_dir: PathBuf::from(prompt(
+        app_url: prompt_validated("Trusted app HTTPS URL", None, |value| {
+            validate_app_url(value)
+                .map(|_| ())
+                .map_err(|error| error.to_string())
+        })?,
+        hostname: prompt_validated("Machine DNS label", Some("workstation"), |value| {
+            validate_hostname_label(value).map_err(|error| error.to_string())
+        })?,
+        storage_dir: PathBuf::from(prompt_validated(
             "Secret storage directory",
             default_storage.to_str(),
+            |value| {
+                let path =
+                    resolve_storage(Path::new(value), &path).map_err(|error| error.to_string())?;
+                validate_storage_path(&path)
+            },
         )?),
-        public_key: prompt("Passkey public key (base64url DER SPKI)", None)?,
-        listen_addr: prompt("UDP listener address", Some("0.0.0.0:0"))?,
+        public_key: prompt_validated("Passkey public key", None, |value| {
+            decode_public_key(value)
+                .map(|_| ())
+                .map_err(|error| error.to_string())
+        })?,
+        listen_addr: prompt_validated("UDP listener address", Some("0.0.0.0:0"), |value| {
+            value
+                .parse::<SocketAddr>()
+                .map(|_| ())
+                .map_err(|error| error.to_string())
+        })?,
     };
     let validated = validate_values(&path, values.clone(), false)?;
     values.storage_dir = validated.storage_dir.clone();
-    eprintln!("\nTrust review");
+    eprintln!("\nReview setup");
     eprintln!("App origin: {}", validated.app_origin);
     eprintln!("RP ID: {}", validated.rp_id);
-    eprintln!("Advertised hostname: {}", validated.hostname);
+    eprintln!("Machine label: {}", validated.hostname);
     eprintln!("Storage: {}", validated.storage_dir.display());
-    eprintln!("Listener: {}", validated.listen_addr);
+    eprintln!("UDP listener: {}", validated.listen_addr);
     eprintln!(
-        "Public-key fingerprint: {}",
+        "Pinned key fingerprint: {}",
         validated.public_key_fingerprint
     );
-    if !confirm("Trust this passkey public key and save this setup?")? {
-        return Err(invalid("setup cancelled; configuration was not written").into());
+    if !confirm("Trust this pinned passkey key and save?")? {
+        return Err(invalid("Setup cancelled; configuration was not written").into());
     }
 
     create_private_dir(&validated.storage_dir).map_err(|error| {
@@ -515,11 +584,6 @@ pub fn setup(path: &Path) -> Result<()> {
     })?;
     write_config(&path, &values, replace)?;
     println!("Setup saved to {}", path.display());
-    println!("Storage directory: {}", validated.storage_dir.display());
-    println!(
-        "Public-key fingerprint: {}",
-        validated.public_key_fingerprint
-    );
     Ok(())
 }
 
@@ -650,7 +714,7 @@ mod tests {
             .unwrap()
             .map(|entry| entry.unwrap().file_name())
             .collect::<HashSet<_>>();
-        check(&config_path).unwrap();
+        check(&config_path, false).unwrap();
         assert_eq!(fs::read(&config_path).unwrap(), config_bytes);
         assert_eq!(
             fs::metadata(&config_path).unwrap().modified().unwrap(),

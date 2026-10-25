@@ -74,7 +74,7 @@ fn top_level_help_is_successful_and_describes_the_cli() {
 fn subcommand_help_succeeds_without_loading_configuration() {
     for (command, expected) in [
         ("setup", "Create the local configuration"),
-        ("check", "Validate the configuration"),
+        ("check", "Use --details to show the resolved configuration"),
         ("encrypt", "File to encrypt"),
         ("decrypt", "New plaintext file to create"),
     ] {
@@ -83,6 +83,10 @@ fn subcommand_help_succeeds_without_loading_configuration() {
             &[expected, "Examples:"],
         );
     }
+    assert_successful_help(
+        &["check", "--help"],
+        &["--details", "resolved paths", "key fingerprint"],
+    );
 }
 
 #[test]

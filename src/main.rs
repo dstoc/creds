@@ -45,9 +45,9 @@ async fn run() -> Result<(), CliError> {
             let path = config_path(explicit_config_path.as_deref())?;
             config::setup(&path).map_err(|error| setup_error(&path, error))?;
         }
-        cli::Commands::Check => {
+        cli::Commands::Check { details } => {
             let path = config_path(explicit_config_path.as_deref())?;
-            config::check(&path).map_err(|error| config_error(&path, error))?;
+            config::check(&path, details).map_err(|error| config_error(&path, error))?;
         }
         cli::Commands::Encrypt { name, input } => {
             let path = config_path(explicit_config_path.as_deref())?;
@@ -216,7 +216,7 @@ async fn decrypt(config_path: &Path, name: &str, output_path: &Path) -> Result<(
             },
         )?;
     }
-    eprintln!("Decrypted {name:?} revision {revision}.");
+    eprintln!("Decrypted {name:?} at revision {revision}.");
     Ok(())
 }
 
@@ -284,7 +284,13 @@ fn setup_error(path: &Path, error: Box<dyn Error>) -> CliError {
     if error.to_string().starts_with("Configuration at ") {
         return CliError::message(error.to_string());
     }
+    if error.to_string().starts_with("Setup cancelled;") {
+        return CliError::message(error.to_string());
+    }
     match error_kind(&*error) {
+        Some(io::ErrorKind::UnexpectedEof) => {
+            CliError::message("Setup cancelled because input ended")
+        }
         Some(io::ErrorKind::AlreadyExists) => {
             CliError::message(format!("Cannot write {display_path}: file already exists"))
         }
@@ -376,7 +382,7 @@ fn approval_error(name: &str, error: Box<dyn Error + Send + Sync>) -> CliError {
             CliError::message(format!("Approval for secret {name:?} was cancelled"))
         }
         Ok(error) if error.kind() == io::ErrorKind::TimedOut => {
-            CliError::with_source(format!("Approval for secret {name:?} timed out"), error)
+            CliError::message(format!("Approval for secret {name:?} expired"))
         }
         Ok(error) => CliError::with_source(format!("Approval failed for secret {name:?}"), error),
         Err(error) => {
@@ -432,7 +438,7 @@ mod diagnostic_tests {
         let diagnostic = approval_error("synthetic-secret", Box::new(error));
         assert_eq!(
             diagnostic.to_string(),
-            "Approval for secret \"synthetic-secret\" timed out: approval expired after two minutes"
+            "Approval for secret \"synthetic-secret\" expired"
         );
     }
 

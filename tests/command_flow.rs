@@ -349,7 +349,7 @@ fn redact_live_handoff(stderr: &str) -> String {
         } else if line.starts_with("Or scan this QR code") {
             redacted.push_str("[REDACTED live QR code, machine label, and UDP port]\n");
             in_qr = true;
-        } else if in_qr && line.starts_with("Waiting for a browser connection") {
+        } else if in_qr && line.starts_with("Waiting for approval.") {
             in_qr = false;
             redacted.push_str(line);
             redacted.push('\n');
@@ -539,7 +539,7 @@ async fn read_exact(
     Ok(())
 }
 
-fn assert_silent_encryption(output: Output, expected_revision: u64) {
+fn assert_silent_encryption(output: &Output, expected_revision: u64) {
     assert!(
         output.status.success(),
         "{}",
@@ -552,13 +552,11 @@ fn assert_silent_encryption(output: Output, expected_revision: u64) {
         "{stderr}"
     );
     assert!(
-        stderr.contains("Waiting for a browser connection"),
+        stderr.contains("Waiting for approval. Press Ctrl-C to cancel."),
         "{stderr}"
     );
-    assert!(
-        stderr.contains("Approval request established. Waiting up to two minutes"),
-        "{stderr}"
-    );
+    assert!(!stderr.contains("30 seconds"), "{stderr}");
+    assert!(!stderr.contains("two minutes"), "{stderr}");
 }
 
 #[tokio::test]
@@ -583,7 +581,18 @@ async fn encrypt_decrypt_commands_use_authenticated_live_handoffs_and_frozen_sna
     approval.assert_request("primary", 1, "encrypt");
     assert_eq!(approval.approval_timeout_ms(), 120_000);
     approval.send_key(key_one, &fixture_signer).await?;
-    assert_silent_encryption(encrypt_file.finish()?, 1);
+    let encrypted_file = encrypt_file.finish()?;
+    assert_silent_encryption(&encrypted_file, 1);
+    capture_cli_output(
+        "encrypt-file-success",
+        "cargo test --locked --test command_flow encrypt_decrypt_commands_use_authenticated_live_handoffs_and_frozen_snapshots -- --exact",
+        &format!(
+            "creds --config {:?} encrypt primary {:?}",
+            config.path, file_input
+        ),
+        "synthetic input file bytes: `00 ff 80 0a 41 00`; synthetic valid assertion and matching key supplied",
+        &encrypted_file,
+    )?;
 
     let decrypt_file = RunningCommand::start(&config, "decrypt", "primary", &file_output, None)?;
     let approval = connect_approval(decrypt_file.approve_url()).await?;
@@ -608,7 +617,7 @@ async fn encrypt_decrypt_commands_use_authenticated_live_handoffs_and_frozen_sna
     let approval = connect_approval(encrypt_stdin.approve_url()).await?;
     approval.assert_request("primary", 2, "encrypt");
     approval.send_key(key_two, &fixture_signer).await?;
-    assert_silent_encryption(encrypt_stdin.finish()?, 2);
+    assert_silent_encryption(&encrypt_stdin.finish()?, 2);
 
     // Start decrypt before replacement, then publish revision 3 before approving it.
     // The immutable request and the encrypted snapshot must both remain at revision 2.
@@ -629,7 +638,7 @@ async fn encrypt_decrypt_commands_use_authenticated_live_handoffs_and_frozen_sna
     replacement_approval
         .send_key(key_three, &fixture_signer)
         .await?;
-    assert_silent_encryption(replace_while_decrypt_waits.finish()?, 3);
+    assert_silent_encryption(&replace_while_decrypt_waits.finish()?, 3);
 
     assert_eq!(frozen_approval.revision(), 2);
     frozen_approval.send_key(key_two, &fixture_signer).await?;
@@ -654,7 +663,7 @@ async fn encrypt_decrypt_commands_use_authenticated_live_handoffs_and_frozen_sna
     let approval = connect_approval(empty_encrypt.approve_url()).await?;
     approval.assert_request("empty", 1, "encrypt");
     approval.send_key(key_one, &fixture_signer).await?;
-    assert_silent_encryption(empty_encrypt.finish()?, 1);
+    assert_silent_encryption(&empty_encrypt.finish()?, 1);
 
     let empty_stdout = RunningCommand::start(&config, "decrypt", "empty", Path::new("-"), None)?;
     let approval = connect_approval(empty_stdout.approve_url()).await?;

@@ -24,17 +24,21 @@ pub(crate) struct Cli {
 pub(crate) enum Commands {
     /// Create or replace the local configuration.
     #[command(
-        long_about = "Create the local configuration and storage directory. Setup prompts for the trusted approval app URL, machine name, storage path, and public key.",
+        long_about = "Create the local configuration and storage directory. Setup validates each answer as you enter it, reviews the resolved settings and pinned-key fingerprint, then asks before saving.",
         after_help = "Examples:\n  creds setup\n  creds --config ./creds.toml setup"
     )]
     Setup,
 
     /// Check the local configuration and storage directory.
     #[command(
-        long_about = "Validate the configuration, public key, and storage directory. This command does not start an approval listener.",
-        after_help = "Examples:\n  creds check\n  creds --config ./creds.toml check"
+        long_about = "Validate the configuration, public key, and storage directory. This command is local and read-only; it does not start an approval listener. Use --details to show the resolved configuration.",
+        after_help = "Examples:\n  creds check\n  creds check --details\n  creds --config ./creds.toml check --details"
     )]
-    Check,
+    Check {
+        /// Show resolved paths, app origin, RP ID, listener, and key fingerprint.
+        #[arg(long)]
+        details: bool,
+    },
 
     /// Encrypt a named secret from a file or stdin.
     #[command(
@@ -81,7 +85,14 @@ mod tests {
             Cli::try_parse_from(["creds", "--config", "creds.toml", "check"])
                 .unwrap()
                 .command,
-            Commands::Check
+            Commands::Check { details: false }
+        ));
+
+        assert!(matches!(
+            Cli::try_parse_from(["creds", "check", "--details"])
+                .unwrap()
+                .command,
+            Commands::Check { details: true }
         ));
 
         let cli = Cli::try_parse_from(["creds", "check", "--config=creds.toml"]).unwrap();
@@ -135,7 +146,7 @@ mod tests {
     fn each_command_help_is_specific_and_contains_examples() {
         for (command, expected) in [
             ("setup", "Create the local configuration"),
-            ("check", "Validate the configuration"),
+            ("check", "Use --details to show the resolved configuration"),
             ("encrypt", "File to encrypt"),
             ("decrypt", "write plaintext to stdout"),
         ] {
