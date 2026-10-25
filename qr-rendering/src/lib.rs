@@ -139,7 +139,7 @@ fn render_with_packing(
     let columns = width.div_ceil(modules_wide);
     let rows = height.div_ceil(modules_high);
     let mut output = String::new();
-    output.push_str("\x1b[7m");
+    output.push_str("\x1b[30;47m");
     for cell_y in 0..rows {
         for cell_x in 0..columns {
             let mut mask = 0_u8;
@@ -159,7 +159,7 @@ fn render_with_packing(
             output.push('\n');
         }
     }
-    output.push_str("\x1b[27m");
+    output.push_str("\x1b[0m");
     output
 }
 
@@ -241,6 +241,54 @@ fn render_kitty(matrix: &Matrix) -> String {
 mod tests {
     use super::*;
 
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum TestColor {
+        Black,
+        White,
+    }
+
+    fn effective_colors(
+        text: &str,
+        default_fg: TestColor,
+        default_bg: TestColor,
+    ) -> (TestColor, TestColor) {
+        let mut foreground = default_fg;
+        let mut background = default_bg;
+        let mut first_character_colors = None;
+        let mut chars = text.chars();
+        while let Some(character) = chars.next() {
+            if character == '\x1b' {
+                assert_eq!(chars.next(), Some('['));
+                let mut parameters = String::new();
+                loop {
+                    let parameter = chars.next().expect("complete SGR sequence");
+                    if parameter == 'm' {
+                        break;
+                    }
+                    parameters.push(parameter);
+                }
+                for parameter in parameters.split(';') {
+                    match parameter {
+                        "0" => {
+                            foreground = default_fg;
+                            background = default_bg;
+                        }
+                        "30" => foreground = TestColor::Black,
+                        "47" => background = TestColor::White,
+                        _ => panic!("unexpected SGR parameter {parameter:?}"),
+                    }
+                }
+            } else if first_character_colors.is_none() {
+                first_character_colors = Some((foreground, background));
+            }
+        }
+        assert_eq!(
+            first_character_colors,
+            Some((TestColor::Black, TestColor::White))
+        );
+        (foreground, background)
+    }
+
     fn known_matrix() -> Matrix {
         Matrix::from_rows(&[
             &[true, false, true],
@@ -254,11 +302,31 @@ mod tests {
             panic!("expected text output");
         };
         let body = text
-            .strip_prefix("\x1b[7m")
+            .strip_prefix("\x1b[30;47m")
             .unwrap()
-            .strip_suffix("\x1b[27m")
+            .strip_suffix("\x1b[0m")
             .unwrap();
         body.split('\n').map(str::to_owned).collect()
+    }
+
+    #[test]
+    fn text_renderers_use_black_on_white_and_reset_terminal_attributes() {
+        for mode in [Mode::Braille, Mode::Sextant, Mode::Half] {
+            let Rendered::Text(text) = render(&known_matrix(), mode) else {
+                panic!("expected text output for {mode}");
+            };
+
+            for (default_fg, default_bg) in [
+                (TestColor::White, TestColor::Black),
+                (TestColor::Black, TestColor::White),
+            ] {
+                assert_eq!(
+                    effective_colors(&text, default_fg, default_bg),
+                    (default_fg, default_bg),
+                    "{mode} should restore the terminal colors"
+                );
+            }
+        }
     }
 
     #[test]

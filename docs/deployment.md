@@ -72,7 +72,7 @@ qr_mode = "braille" # optional: braille, sextant, half, or kitty
 
 `braille` packs two columns by four rows of modules into each Unicode Braille character. `sextant` packs two by three modules into Symbols for Legacy Computing sextant characters. These modes need a terminal font with the corresponding Unicode glyphs; sextant glyphs are in Unicode 13.0 and later. `half` keeps the existing upper/lower half-block rendering and is the default.
 
-The text renderers use the terminal's inverse video colors for the QR so dark modules and the light quiet zone remain distinct in both dark and light terminal themes.
+The text renderers set ANSI black (color 0) as the foreground for dark modules and ANSI white (color 7) as the background for the light quiet zone. This mapping works with dark and light terminal themes. The renderer resets terminal attributes after the QR.
 
 `kitty` sends a black-and-white RGB image through the [Kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/). The CLI emits the image only when standard error is a terminal and it detects Kitty, WezTerm, or Ghostty from their environment markers (`KITTY_WINDOW_ID`, `WEZTERM_PANE`, or `TERM=xterm-ghostty` / `TERM_PROGRAM=ghostty`). If it cannot detect a supported terminal, or standard error is redirected, it prints an explanatory message and keeps the approval URL available. It does not switch to another QR mode or write image data to standard output. A terminal or multiplexer can still reject the protocol after detection; use the URL in that case.
 
