@@ -13,6 +13,7 @@ import zipfile
 from pathlib import Path
 
 import package_release
+import resolve_release
 import verify_release_assets
 
 
@@ -151,6 +152,69 @@ class ReleaseVerificationTests(unittest.TestCase):
             verify_release_assets.verify_assets(self.tag, self.local, self.downloaded, self.release)
 
 
+class ReleaseLookupTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tag = "v1.2.3"
+        self.draft = {
+            "id": 12345,
+            "tag_name": self.tag,
+            "draft": True,
+            "html_url": "https://github.com/example/project/releases/tag/untagged-example",
+        }
+
+    def test_draft_missing_from_by_tag_lookup_is_resolved_from_paginated_listing(self) -> None:
+        pages = [
+            [{"id": 12000, "tag_name": "v1.2.2", "draft": False}],
+            [self.draft],
+        ]
+
+        release_id = resolve_release.resolve_draft_release_id(self.tag, pages)
+        self.assertEqual(release_id, 12345)
+        self.assertEqual(
+            resolve_release.verify_release(self.tag, self.draft, expected_id=release_id), 12345
+        )
+
+    def test_missing_release_reports_permission_and_state_checks(self) -> None:
+        with self.assertRaisesRegex(ValueError, "contents: write and push access"):
+            resolve_release.resolve_draft_release_id(self.tag, [[], []])
+
+    def test_api_error_payload_is_not_treated_as_an_empty_release_listing(self) -> None:
+        with self.assertRaisesRegex(ValueError, "not an array of pages"):
+            resolve_release.resolve_draft_release_id(
+                self.tag, {"message": "Resource not accessible by integration"}
+            )
+
+    def test_duplicate_tagged_releases_are_rejected_as_ambiguous(self) -> None:
+        published = {**self.draft, "id": 12346, "draft": False}
+        with self.assertRaisesRegex(ValueError, "ambiguous release lookup"):
+            resolve_release.resolve_draft_release_id(self.tag, [[self.draft], [published]])
+
+    def test_published_release_from_listing_is_rejected(self) -> None:
+        published = {**self.draft, "draft": False}
+        with self.assertRaisesRegex(ValueError, "is not a draft"):
+            resolve_release.resolve_draft_release_id(self.tag, [[published]])
+
+    def test_release_fetched_by_id_must_have_the_exact_tag(self) -> None:
+        wrong_tag = {**self.draft, "tag_name": "v1.2.4"}
+        with self.assertRaisesRegex(ValueError, "expected 'v1.2.3'"):
+            resolve_release.verify_release(self.tag, wrong_tag, expected_id=12345)
+
+    def test_release_fetched_by_id_must_keep_the_resolved_id(self) -> None:
+        with self.assertRaisesRegex(ValueError, "expected release ID 12346"):
+            resolve_release.verify_release(self.tag, self.draft, expected_id=12346)
+
+    def test_published_release_is_only_accepted_after_publication(self) -> None:
+        published = {**self.draft, "draft": False}
+        with self.assertRaisesRegex(ValueError, "is not a draft"):
+            resolve_release.verify_release(self.tag, published)
+        self.assertEqual(
+            resolve_release.verify_release(
+                self.tag, published, expected_id=12345, expected_state="published"
+            ),
+            12345,
+        )
+
+
 class WorkflowContractTests(unittest.TestCase):
     def test_release_please_uses_rust_versioning_and_keeps_releases_in_draft(self) -> None:
         config = json.loads((REPO_ROOT / "release-please-config.json").read_text(encoding="utf-8"))
@@ -242,14 +306,32 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("refs/heads/main", workflow)
         self.assertIn("test -z \"$RELEASE_AS\"", workflow)
         self.assertIn("git ls-remote --exit-code --refs", workflow)
-        self.assertIn("release.get(\"draft\") is not True", workflow)
+        self.assertIn('WORKFLOW_SHA: ${{ github.workflow_sha }}', workflow)
+        self.assertIn('git show "$WORKFLOW_SHA:scripts/resolve_release.py"', workflow)
+        self.assertIn("gh api --method PATCH -F draft=false", workflow)
+        self.assertNotIn("gh release create", workflow)
         upload = workflow.index("- name: Upload assets to draft")
         verify = workflow.index("- name: Download and verify every uploaded byte")
         publish = workflow.index("- name: Publish verified release")
         self.assertLess(upload, verify)
         self.assertLess(verify, publish)
-        self.assertIn("gh release edit \"$RELEASE_TAG\" --draft=false --verify-tag", workflow)
+        self.assertIn("--expected-state published", workflow)
 
+    def test_release_workflow_resolves_and_mutates_releases_by_id(self) -> None:
+        workflow = (REPO_ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
+        self.assertIn(
+            'gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/releases?per_page=100"', workflow
+        )
+        self.assertIn('gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID"', workflow)
+        self.assertIn(
+            "https://uploads.github.com/repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID/assets",
+            workflow,
+        )
+        self.assertIn('"repos/$GITHUB_REPOSITORY/releases/assets/$asset_id"', workflow)
+        self.assertNotIn("/releases/tags/", workflow)
+        self.assertNotIn("gh release upload", workflow)
+        self.assertNotIn("gh release download", workflow)
+        self.assertNotIn("gh release edit", workflow)
 
 if __name__ == "__main__":
     unittest.main()
