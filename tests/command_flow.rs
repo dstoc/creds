@@ -253,7 +253,16 @@ impl RunningCommand {
             if Instant::now() >= deadline {
                 let _ = self.child.kill();
                 let _ = self.child.wait();
-                return Err("command did not finish within 20 seconds".into());
+                while let Ok(line) = self.stderr_lines.try_recv() {
+                    if let Ok(Some(line)) = line {
+                        self.stderr.push_str(&line);
+                    }
+                }
+                let stderr = redact_live_handoff(&self.stderr);
+                return Err(format!(
+                    "command did not finish within {MAX_COMMAND:?}; captured stderr:\n{stderr}"
+                )
+                .into());
             }
             thread::sleep(Duration::from_millis(20));
         };
@@ -277,6 +286,79 @@ impl RunningCommand {
             stderr: self.stderr.into_bytes(),
         })
     }
+}
+
+fn capture_cli_output(
+    name: &str,
+    harness: &str,
+    command: &str,
+    supplied_input: &str,
+    output: &Output,
+) -> Result<(), Box<dyn Error>> {
+    let Some(root) = std::env::var_os("CREDS_CLI_CAPTURE_DIR") else {
+        return Ok(());
+    };
+    let directory = PathBuf::from(root).join(name);
+    fs::create_dir_all(&directory)?;
+    fs::write(directory.join("harness.txt"), format!("{harness}\n"))?;
+    fs::write(directory.join("command.txt"), format!("{command}\n"))?;
+    fs::write(directory.join("input.txt"), format!("{supplied_input}\n"))?;
+    fs::write(
+        directory.join("exit-code.txt"),
+        format!("{}\n", output.status.code().unwrap_or(-1)),
+    )?;
+    let stdout_file = if std::str::from_utf8(&output.stdout).is_ok() {
+        "stdout.txt"
+    } else {
+        "stdout.bin"
+    };
+    fs::write(directory.join(stdout_file), &output.stdout)?;
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let redacted = redact_live_handoff(&stderr);
+    let stdout_summary = match std::str::from_utf8(&output.stdout) {
+        Ok(text) => text.to_owned(),
+        Err(_) => format!(
+            "[binary stdout; {} bytes; hex: {}]\n",
+            output.stdout.len(),
+            output
+                .stdout
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<Vec<_>>()
+                .join(" ")
+        ),
+    };
+    fs::write(directory.join("stderr.txt"), &redacted)?;
+    fs::write(
+        directory.join("transcript.txt"),
+        format!(
+            "STDERR (live handoff material redacted):\n{redacted}\nSTDOUT (separate byte stream; {} bytes):\n{stdout_summary}",
+            output.stdout.len(),
+        ),
+    )?;
+    Ok(())
+}
+
+fn redact_live_handoff(stderr: &str) -> String {
+    let mut redacted = String::new();
+    let mut in_qr = false;
+    for line in stderr.lines() {
+        if line.starts_with("Open this URL on the approval device:") {
+            redacted.push_str("[REDACTED live handoff URL, request ID, and certificate pin]\n");
+        } else if line.starts_with("Or scan this QR code") {
+            redacted.push_str("[REDACTED live QR code, machine label, and UDP port]\n");
+            in_qr = true;
+        } else if in_qr && line.starts_with("Waiting for a browser connection") {
+            in_qr = false;
+            redacted.push_str(line);
+            redacted.push('\n');
+        } else if !in_qr {
+            redacted.push_str(line);
+            redacted.push('\n');
+        }
+    }
+    redacted
 }
 
 #[derive(Debug)]
@@ -409,6 +491,10 @@ async fn connect_approval(url: &Url) -> Result<ApprovalSession, Box<dyn Error>> 
     }))?;
     write_frame(&mut send, &hello).await?;
     let request: Value = serde_json::from_slice(&read_frame(&mut receive).await?)?;
+    let mut trailing = [0_u8; 1];
+    if receive.read(&mut trailing).await?.is_some() {
+        return Err("server request stream included data after its frame".into());
+    }
     Ok(ApprovalSession {
         connection,
         send,
@@ -554,6 +640,13 @@ async fn encrypt_decrypt_commands_use_authenticated_live_handoffs_and_frozen_sna
         String::from_utf8_lossy(&decrypted_stdout.stderr)
     );
     assert_eq!(decrypted_stdout.stdout, binary_two);
+    capture_cli_output(
+        "decrypt-stdout-success",
+        "cargo test --locked --test command_flow encrypt_decrypt_commands_use_authenticated_live_handoffs_and_frozen_snapshots -- --exact",
+        &format!("creds --config {:?} decrypt primary -", config.path),
+        "synthetic encrypted fixture approved with key `[0x22; 32]`; expected stdout bytes are `f0 00 7f fe 78`",
+        &decrypted_stdout,
+    )?;
 
     // Empty stdin is a valid exact payload and first creation uses revision 1.
     let empty_encrypt =
@@ -591,6 +684,13 @@ async fn encrypt_decrypt_commands_use_authenticated_live_handoffs_and_frozen_sna
     assert!(!cancelled_replace.status.success());
     assert!(String::from_utf8_lossy(&cancelled_replace.stderr).contains("cancelled"));
     assert_eq!(fs::read(&ciphertext_path)?, ciphertext_before);
+    capture_cli_output(
+        "approval-cancelled",
+        "cargo test --locked --test command_flow encrypt_decrypt_commands_use_authenticated_live_handoffs_and_frozen_snapshots -- --exact",
+        &format!("creds --config {:?} encrypt primary -", config.path),
+        "stdin bytes: synthetic plaintext `must not publish`; Ctrl-C sent after an invalid synthetic assertion",
+        &cancelled_replace,
+    )?;
 
     fs::write(&file_output, b"existing destination")?;
     let failed_decrypt = RunningCommand::start(&config, "decrypt", "primary", &file_output, None)?;
@@ -605,6 +705,34 @@ async fn encrypt_decrypt_commands_use_authenticated_live_handoffs_and_frozen_sna
     assert_eq!(fs::read(&ciphertext_path)?, ciphertext_before);
     assert_eq!(fs::read(&file_output)?, b"existing destination");
 
+    let existing_output = RunningCommand::start(&config, "decrypt", "primary", &file_output, None)?;
+    let approval = connect_approval(existing_output.approve_url()).await?;
+    approval.assert_request("primary", 3, "decrypt");
+    approval.send_key(key_three, &fixture_signer).await?;
+    let refused_output = existing_output.finish()?;
+    assert!(!refused_output.status.success());
+    assert!(refused_output.stdout.is_empty());
+    let stderr = String::from_utf8_lossy(&refused_output.stderr);
+    assert!(
+        stderr.contains(&format!(
+            "Cannot write {}: file already exists",
+            file_output.display()
+        )),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("Custom {"), "{stderr}");
+    assert_eq!(fs::read(&file_output)?, b"existing destination");
+    capture_cli_output(
+        "decrypt-existing-output",
+        "cargo test --locked --test command_flow encrypt_decrypt_commands_use_authenticated_live_handoffs_and_frozen_snapshots -- --exact",
+        &format!(
+            "creds --config {:?} decrypt primary {:?}",
+            config.path, file_output
+        ),
+        "existing output file contains synthetic bytes `existing destination`; synthetic valid assertion and matching key supplied",
+        &refused_output,
+    )?;
+
     // A valid passkey assertion with a key from the wrong revision must fail before
     // the exclusive output file is created or changed.
     let mismatched_key_decrypt =
@@ -615,8 +743,24 @@ async fn encrypt_decrypt_commands_use_authenticated_live_handoffs_and_frozen_sna
     let mismatched_key = mismatched_key_decrypt.finish()?;
     assert!(!mismatched_key.status.success());
     assert!(mismatched_key.stdout.is_empty());
+    let stderr = String::from_utf8_lossy(&mismatched_key.stderr);
+    assert!(
+        stderr.contains("authentication failed (key does not match or envelope is damaged)"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("Custom {"), "{stderr}");
     assert_eq!(fs::read(&ciphertext_path)?, ciphertext_before);
     assert_eq!(fs::read(&file_output)?, b"existing destination");
+    capture_cli_output(
+        "decrypt-authentication-failure",
+        "cargo test --locked --test command_flow encrypt_decrypt_commands_use_authenticated_live_handoffs_and_frozen_snapshots -- --exact",
+        &format!(
+            "creds --config {:?} decrypt primary {:?}",
+            config.path, file_output
+        ),
+        "synthetic valid assertion supplied key `[0x22; 32]`, which does not match the encrypted fixture; existing output remains unchanged",
+        &mismatched_key,
+    )?;
 
     Ok(())
 }
