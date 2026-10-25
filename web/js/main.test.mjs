@@ -514,6 +514,25 @@ test("cancel during connection setup closes the late session without sending a k
   assert.match(ui.element("#outcome-message").textContent, /cancelled/u);
 });
 
+test("Done keeps a cancelled request dismissed when connection setup rejects later", async () => {
+  let rejectConnection;
+  const ui = startApprovalUi({
+    connectHandoff: () => new Promise((_resolve, reject) => { rejectConnection = reject; }),
+  });
+  await settle();
+
+  await ui.click("#cancel-request");
+  await ui.click("#outcome-done");
+  assert.equal(ui.element("#ready-panel").hidden, false);
+
+  rejectConnection(new DOMException("Aborted", "AbortError"));
+  await settle();
+
+  assert.equal(ui.element("#ready-panel").hidden, false);
+  assert.equal(ui.element("#approval-panel").hidden, true);
+  assert.equal(ui.element("#outcome-panel").hidden, true);
+});
+
 test("an established transport that stalls before the approval request closes after 30 seconds", async () => {
   let connectionSignal;
   const ui = startApprovalUi({
@@ -611,6 +630,27 @@ test("approval expiry closes the session and clears the key while transmission i
   assert.equal(ui.element("#cancel-request").disabled, true);
   assert.match(ui.element("#outcome-message").textContent, /Request expired/u);
   assert.doesNotMatch(ui.element("#outcome-message").textContent, /Approval sent/u);
+});
+
+test("Done keeps an expired request dismissed when transmission settles later", async () => {
+  const session = createSession();
+  let resolveSend;
+  session.sendKey = () => new Promise((resolve) => { resolveSend = resolve; });
+  const ui = startApprovalUi({ connectHandoff: async () => session });
+  await settle();
+
+  const sending = ui.click("#approve-request");
+  await settle();
+  assert.ok(resolveSend);
+  ui.fireTimers();
+  assert.match(ui.element("#outcome-message").textContent, /Request expired/u);
+  await ui.click("#outcome-done");
+  resolveSend();
+  await sending;
+
+  assert.equal(ui.element("#ready-panel").hidden, false);
+  assert.equal(ui.element("#outcome-panel").hidden, true);
+  assert.match(ui.element("#outcome-message").textContent, /Request expired/u);
 });
 
 test("approval expiry aborts a pending WebAuthn ceremony before it can send a key", async () => {

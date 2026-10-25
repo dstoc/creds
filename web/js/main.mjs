@@ -68,6 +68,7 @@ let approvalTimeout = null;
 let connectionExpired = false;
 let approvalExpired = false;
 let approvalKey = null;
+let requestGeneration = 0;
 let destinationNotice = "";
 let activeView = "setup";
 let returnView = "ready";
@@ -210,9 +211,9 @@ function showPendingPage() {
   cancelButton.disabled = false;
 }
 
-function expireApproval() {
+function expireApproval(session, generation) {
+  if (generation !== requestGeneration || approvalSession !== session || !session?.isActive()) return;
   approvalTimeout = null;
-  if (!approvalSession?.isActive()) return;
   approvalExpired = true;
   approvalKey?.fill(0);
   approvalKey = null;
@@ -292,6 +293,7 @@ async function preparePendingHandoff() {
 
 async function beginConnection() {
   if (!pendingHandoff || !pendingDestination || connectionInProgress || approvalSession?.isActive()) return;
+  const generation = ++requestGeneration;
   const destination = pendingDestination;
   connectionInProgress = true;
   approvalCancelled = false;
@@ -313,20 +315,26 @@ async function beginConnection() {
 
   try {
     connectionController = new AbortController();
+    const controller = connectionController;
     connectionExpired = false;
     show("Connecting…");
     const connectionTimedOut = new Promise((_, reject) => {
       connectionTimeout = setTimeout(() => {
+        if (generation !== requestGeneration) return;
         connectionTimeout = null;
         connectionExpired = true;
-        connectionController?.abort();
+        controller.abort();
         reject(new DOMException("Connection setup exceeded 30 seconds.", "TimeoutError"));
       }, 30_000);
     });
     const connectedSession = await Promise.race([
-      connectHandoff(destination, connectionController.signal),
+      connectHandoff(destination, controller.signal),
       connectionTimedOut,
     ]);
+    if (generation !== requestGeneration) {
+      connectedSession.close();
+      return;
+    }
     clearConnectionTimeout();
     if (approvalCancelled) {
       connectedSession.close();
@@ -344,7 +352,7 @@ async function beginConnection() {
     destinationNotice = "";
     approveButton.disabled = false;
     approvalExpired = false;
-    approvalTimeout = setTimeout(expireApproval, request.approvalTimeoutMs);
+    approvalTimeout = setTimeout(() => expireApproval(connectedSession, generation), request.approvalTimeoutMs);
     connectedSession.failed.then((error) => {
       if (approvalSession !== connectedSession) return;
       clearApprovalTimeout();
@@ -356,11 +364,12 @@ async function beginConnection() {
       connectionInProgress = false;
       approvalSession = null;
       setSettingsEditable(true);
-      if (!approvalExpired && !approvalCancelled && !approvalSent) {
+      if (generation === requestGeneration && !approvalExpired && !approvalCancelled && !approvalSent) {
         showOutcome(`The CLI connection closed. ${error instanceof Error ? error.message : String(error)}`, { error: true });
       }
     });
   } catch (error) {
+    if (generation !== requestGeneration) return;
     clearConnectionTimeout();
     connectionInProgress = false;
     approvalSession = null;
@@ -481,6 +490,7 @@ async function acceptDestination() {
 }
 
 function cancelRequest() {
+  requestGeneration += 1;
   approvalCancelled = true;
   approvalSent = false;
   clearConnectionTimeout();
@@ -501,6 +511,9 @@ function cancelRequest() {
 }
 
 function finishOutcome() {
+  requestGeneration += 1;
+  clearConnectionTimeout();
+  clearApprovalTimeout();
   pendingHandoff = null;
   pendingDestination = null;
   connectionInProgress = false;
@@ -633,28 +646,34 @@ approveButton.addEventListener("click", async () => {
     approveButton.disabled = true;
     return;
   }
+  const generation = requestGeneration;
+  const session = approvalSession;
+  const controller = new AbortController();
   approveButton.disabled = true;
-  approvalController = new AbortController();
+  approvalController = controller;
   showIn("request", "Confirm with your passkey…");
   let key;
   try {
-    const approved = await createApprovalAssertion(approvalSession.request, approvalController.signal);
-    if (approvalController.signal.aborted) {
+    const approved = await createApprovalAssertion(session.request, controller.signal);
+    key = approved.key;
+    if (generation !== requestGeneration) return;
+    if (controller.signal.aborted) {
       throw new DOMException(approvalExpired ? "Approval window expired." : "Approval was cancelled.", approvalExpired ? "TimeoutError" : "AbortError");
     }
-    key = approved.key;
-    if (!approvalSession?.isActive()) {
-      throw approvalSession?.failure() ?? new Error("The CLI approval session is closed.");
+    if (!session.isActive()) {
+      throw session.failure() ?? new Error("The CLI approval session is closed.");
     }
     approvalKey = key;
     cancelButton.disabled = true;
-    await approvalSession.sendKey(key, approved.assertion);
+    await session.sendKey(key, approved.assertion);
+    if (generation !== requestGeneration || approvalSession !== session) return;
     if (approvalExpired) throw new DOMException("Approval window expired.", "TimeoutError");
     clearApprovalTimeout();
     approvalSent = true;
     setSettingsEditable(!approvalSession?.isActive());
     showOutcome("Approval sent. Check your terminal.");
   } catch (error) {
+    if (generation !== requestGeneration || approvalSession !== session) return;
     if (approvalExpired) {
       showOutcome("Request expired. Start a new operation from your terminal.", { error: true });
     } else if (approvalCancelled) {
@@ -667,7 +686,7 @@ approveButton.addEventListener("click", async () => {
   } finally {
     key?.fill(0);
     if (approvalKey === key) approvalKey = null;
-    approvalController = null;
+    if (approvalController === controller) approvalController = null;
   }
 });
 
