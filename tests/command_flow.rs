@@ -87,14 +87,6 @@ async fn each_qr_mode_keeps_the_url_and_output_streams_separate() -> Result<(), 
         if mode == "kitty" {
             assert!(stderr.contains("Kitty QR was selected but stderr is not a recognized"));
         }
-        capture_cli_output(
-            &format!("qr-mode-{mode}"),
-            "cargo test --locked --test command_flow each_qr_mode_keeps_the_url_and_output_streams_separate -- --exact",
-            &format!("creds encrypt {name} -"),
-            "synthetic plaintext: `synthetic QR rendering capture`; synthetic valid assertion and matching key supplied",
-            &output,
-        )?;
-
         let decrypt = RunningCommand::start(&config, "decrypt", &name, Path::new("-"), None)?;
         let url = decrypt.approve_url().to_string();
         let approval = connect_approval(decrypt.approve_url()).await?;

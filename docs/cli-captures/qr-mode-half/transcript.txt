@@ -1,7 +1,0 @@
-STDERR (live handoff material redacted):
-[REDACTED live handoff URL, request ID, and certificate pin]
-[REDACTED live half QR code, machine label, and UDP port]
-Waiting for approval. Press Ctrl-C to cancel.
-Encrypted "qr-half" at revision 1.
-
-STDOUT (separate byte stream; 0 bytes):

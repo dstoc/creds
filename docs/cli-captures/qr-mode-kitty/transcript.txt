@@ -1,8 +1,0 @@
-STDERR (live handoff material redacted):
-[REDACTED live handoff URL, request ID, and certificate pin]
-[REDACTED live kitty QR code, machine label, and UDP port]
-Kitty QR was selected but stderr is not a recognized Kitty graphics terminal; use the URL above.
-Waiting for approval. Press Ctrl-C to cancel.
-Encrypted "qr-kitty" at revision 1.
-
-STDOUT (separate byte stream; 0 bytes):

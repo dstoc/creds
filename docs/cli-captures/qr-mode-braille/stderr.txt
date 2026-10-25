@@ -1,4 +1,0 @@
-[REDACTED live handoff URL, request ID, and certificate pin]
-[REDACTED live braille QR code, machine label, and UDP port]
-Waiting for approval. Press Ctrl-C to cancel.
-Encrypted "qr-braille" at revision 1.

@@ -111,8 +111,6 @@ Run ./scripts/test.sh. GitHub Actions runs this command in the required workflow
 
 The automated and manual checks map to the proposal as follows:
 
-The command-flow test also records redacted synthetic CLI transcripts for the four QR modes in [CLI output captures](cli-captures/README.md).
-
 | Proposal contract | Verification |
 | --- | --- |
 | Stable v1 PRF, HKDF, AAD, and envelope bytes | Shared fixture in test-vectors/envelope-v1.json; Rust tests in src/protocol.rs; Node tests in web/js/envelope.test.mjs |

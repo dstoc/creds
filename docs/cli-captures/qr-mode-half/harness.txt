@@ -1,1 +1,0 @@
-cargo test --locked --test command_flow each_qr_mode_keeps_the_url_and_output_streams_separate -- --exact
