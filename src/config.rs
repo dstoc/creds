@@ -432,13 +432,30 @@ fn write_config(path: &Path, values: &ConfigValues, replace: bool) -> Result<()>
                 let publication = if replace {
                     fs::rename(&temporary, path)
                 } else {
-                    fs::hard_link(&temporary, path).and_then(|()| fs::remove_file(&temporary))
+                    fs::hard_link(&temporary, path)
                 };
                 if let Err(error) = publication {
                     let _ = fs::remove_file(&temporary);
                     return Err(error.into());
                 }
-                File::open(parent)?.sync_all()?;
+                // A failed directory sync happens after the destination was
+                // published. Report that state so callers do not assume the
+                // configuration stayed unchanged.
+                if !replace {
+                    fs::remove_file(&temporary).map_err(|error| {
+                        io::Error::other(format!(
+                            "Configuration at {} was written, but temporary file {} could not be removed; the configuration file now exists: {error}",
+                            path.display(),
+                            temporary.display()
+                        ))
+                    })?;
+                }
+                File::open(parent).and_then(|directory| directory.sync_all()).map_err(|error| {
+                    io::Error::other(format!(
+                        "Configuration at {} was written, but directory sync failed; the replacement may already have occurred: {error}",
+                        path.display()
+                    ))
+                })?;
                 return Ok(());
             }
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
@@ -487,7 +504,15 @@ pub fn setup(path: &Path) -> Result<()> {
         return Err(invalid("setup cancelled; configuration was not written").into());
     }
 
-    create_private_dir(&validated.storage_dir)?;
+    create_private_dir(&validated.storage_dir).map_err(|error| {
+        io::Error::new(
+            error.kind(),
+            format!(
+                "Cannot create storage directory {}: {error}",
+                validated.storage_dir.display()
+            ),
+        )
+    })?;
     write_config(&path, &values, replace)?;
     println!("Setup saved to {}", path.display());
     println!("Storage directory: {}", validated.storage_dir.display());
