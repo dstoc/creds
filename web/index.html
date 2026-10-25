@@ -21,13 +21,43 @@
     <main>
       <section id="setup-panel" class="page" aria-labelledby="setup-title" hidden>
         <h1 id="setup-title" tabindex="-1">Set up this browser</h1>
-        <p class="intro">Add the machine DNS suffix used by your CLI.</p>
-        <div class="field">
-          <label for="dns-suffix">Machine DNS suffix</label>
-          <input id="dns-suffix" type="text" autocomplete="off" spellcheck="false" placeholder="tailnet.example">
+        <div id="setup-choice">
+          <p class="intro">Choose how you use passkeys with creds.</p>
+          <div class="actions">
+            <button id="setup-create-passkey" class="button button-primary" type="button">Create passkey</button>
+            <button id="setup-use-existing" class="button button-secondary" type="button">Use existing passkey</button>
+          </div>
         </div>
-        <div class="actions">
-          <button id="save-settings" class="button button-primary" type="button">Continue</button>
+        <div id="setup-flow" hidden>
+          <div id="setup-created-key" hidden>
+            <p class="intro">Passkey created and PRF confirmed.</p>
+            <div class="field">
+              <label for="setup-public-key">Exported public key</label>
+              <textarea id="setup-public-key" class="key-copy" readonly rows="3" spellcheck="false"></textarea>
+              <button id="copy-setup-public-key" class="button button-secondary button-small" type="button">Copy public key</button>
+              <p class="field-help">Run <code>creds setup</code> and paste this key to configure the CLI.</p>
+            </div>
+          </div>
+          <div id="setup-existing-note" hidden>
+            <p class="intro">Your passkey is used when you approve requests. You do not need to import a public key here.</p>
+          </div>
+          <div class="field">
+            <label for="dns-suffix">Machine DNS suffix</label>
+            <input id="dns-suffix" type="text" autocomplete="off" spellcheck="false" placeholder="tailnet.example">
+          </div>
+          <details id="setup-import-key" hidden>
+            <summary>Import public setup key (optional)</summary>
+            <div class="detail-body">
+              <label for="setup-public-key-input">Public setup key</label>
+              <textarea id="setup-public-key-input" autocomplete="off" spellcheck="false" placeholder="Paste base64url DER SPKI public key"></textarea>
+              <button id="save-setup-public-key" class="button button-secondary button-small" type="button">Save public key</button>
+              <p class="field-help">Importing a key does not enroll it with the CLI or prove possession.</p>
+            </div>
+          </details>
+          <div class="actions">
+            <button id="save-settings" class="button button-primary" type="button">Save and continue</button>
+            <button id="setup-back" class="button button-secondary" type="button">Back</button>
+          </div>
         </div>
         <p id="result" class="status" role="status" aria-live="polite" hidden></p>
       </section>
@@ -39,11 +69,24 @@
 
       <section id="needs-settings-panel" class="page" aria-labelledby="needs-settings-title" hidden>
         <h1 id="needs-settings-title" tabindex="-1">Set up this browser</h1>
-        <p class="intro">Save your machine DNS suffix to continue.</p>
+        <p class="intro">Save your machine DNS suffix to continue this request.</p>
         <p id="needs-settings-status" class="status" role="status" aria-live="polite" hidden></p>
-        <div class="actions">
-          <a class="button button-primary" href="#settings" data-open-settings>Settings</a>
-          <button id="cancel-needs-settings" class="button button-secondary" type="button">Cancel</button>
+        <div id="needs-settings-form">
+          <div class="field">
+            <label for="needs-settings-suffix">Machine DNS suffix</label>
+            <input id="needs-settings-suffix" type="text" autocomplete="off" spellcheck="false" placeholder="tailnet.example">
+          </div>
+          <div class="actions">
+            <button id="save-needs-settings" class="button button-primary" type="button">Save and continue</button>
+            <button id="cancel-needs-settings" class="button button-secondary" type="button">Cancel</button>
+          </div>
+        </div>
+        <div id="needs-settings-invalid" hidden>
+          <p class="intro">Reset the invalid browser settings before continuing.</p>
+          <div class="actions">
+            <a class="button button-primary" href="#settings" data-open-settings>Settings</a>
+            <button id="cancel-invalid-settings" class="button button-secondary" type="button">Cancel</button>
+          </div>
         </div>
       </section>
 
@@ -117,7 +160,7 @@
                 <label for="public-key">Public setup key</label>
                 <textarea id="public-key" autocomplete="off" spellcheck="false" placeholder="Paste base64url DER SPKI public key"></textarea>
                 <button id="save-public-key" class="button button-secondary button-small" type="button">Save public key</button>
-                <p class="field-help">Importing a key does not create a passkey or change CLI trust.</p>
+                <p class="field-help">Importing a key does not enroll it with the CLI or prove possession.</p>
               </div>
             </details>
             <details>
