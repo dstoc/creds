@@ -22,7 +22,6 @@
       <section id="setup-panel" class="page" aria-labelledby="setup-title" hidden>
         <h1 id="setup-title" tabindex="-1">Set up this browser</h1>
         <div id="setup-choice">
-          <p class="intro">Choose how you use passkeys with creds.</p>
           <div class="actions">
             <button id="setup-create-passkey" class="button button-primary" type="button">Create passkey</button>
             <button id="setup-use-existing" class="button button-secondary" type="button">Use existing passkey</button>
@@ -30,16 +29,12 @@
         </div>
         <div id="setup-flow" hidden>
           <div id="setup-created-key" hidden>
-            <p class="intro">Passkey created and PRF confirmed.</p>
             <div class="field">
-              <label for="setup-public-key">Exported public key</label>
+              <label for="setup-public-key">Public key</label>
               <textarea id="setup-public-key" class="key-copy" readonly rows="3" spellcheck="false"></textarea>
               <button id="copy-setup-public-key" class="button button-secondary button-small" type="button">Copy public key</button>
-              <p class="field-help">Run <code>creds setup</code> and paste this key to configure the CLI.</p>
+              <p class="field-help">Run <code>creds setup</code> and paste this key.</p>
             </div>
-          </div>
-          <div id="setup-existing-note" hidden>
-            <p class="intro">Your passkey is used when you approve requests. You do not need to import a public key here.</p>
           </div>
           <div class="field">
             <label for="dns-suffix">Machine DNS suffix</label>

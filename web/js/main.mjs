@@ -51,7 +51,6 @@ const setupChoice = document.querySelector("#setup-choice");
 const setupFlow = document.querySelector("#setup-flow");
 const setupTitle = document.querySelector("#setup-title");
 const setupCreatedKey = document.querySelector("#setup-created-key");
-const setupExistingNote = document.querySelector("#setup-existing-note");
 const setupImportKey = document.querySelector("#setup-import-key");
 const setupPublicKey = document.querySelector("#setup-public-key");
 const setupPublicKeyInput = document.querySelector("#setup-public-key-input");
@@ -149,10 +148,9 @@ function showSetupMode(mode, { focus = true } = {}) {
   setupChoice.hidden = mode !== "choice";
   setupFlow.hidden = mode === "choice";
   setupCreatedKey.hidden = mode !== "created";
-  setupExistingNote.hidden = mode !== "existing";
   setupImportKey.hidden = mode !== "existing";
   if (mode !== "existing") setupImportKey.open = false;
-  setupTitle.textContent = mode === "created" ? "Create passkey"
+  setupTitle.textContent = mode === "created" ? "Passkey created"
     : mode === "existing" ? "Use existing passkey"
       : "Set up this browser";
   if (focus && activeView === "setup") setupTitle.focus();
