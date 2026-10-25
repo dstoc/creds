@@ -5,89 +5,143 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="referrer" content="no-referrer">
     <meta http-equiv="Content-Security-Policy" content="default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; img-src 'self' data:; script-src 'self'; style-src 'self'; connect-src https:; object-src 'none'">
-    <title>creds passkey setup and approval</title>
+    <title>creds</title>
     <link rel="icon" type="image/svg+xml" href="favicon.svg">
     <link rel="stylesheet" href="style.css">
     <script type="module" src="js/main.mjs"></script>
   </head>
   <body>
+    <header class="site-header">
+      <a class="wordmark" href="./" aria-label="creds">creds</a>
+      <nav aria-label="Page navigation">
+        <a id="settings-link" class="header-link" href="#settings">Settings</a>
+        <button id="done-settings" class="header-link" type="button" hidden>Done</button>
+      </nav>
+    </header>
     <main>
-      <header>
-        <p id="eyebrow" class="eyebrow">creds · passkey setup</p>
-        <h1 id="page-title">Create a creds passkey</h1>
-        <p id="page-intro" class="intro">Create a discoverable ES256 passkey, confirm PRF support, and export its public key for local CLI setup. The browser can retain public settings on this origin.</p>
-      </header>
-
-      <section id="approval-panel" aria-labelledby="approval-title" hidden>
-        <h2 id="approval-title">Review approval request</h2>
-        <dl class="request-details">
-          <div><dt>Destination</dt><dd id="request-host"></dd></div>
-          <div><dt>Machine prefix</dt><dd id="request-prefix"></dd></div>
-          <div><dt>DNS suffix</dt><dd id="request-suffix"></dd></div>
-          <div><dt>Name</dt><dd id="request-name"></dd></div>
-          <div><dt>Revision</dt><dd id="request-revision"></dd></div>
-          <div><dt>Operation</dt><dd id="request-operation"></dd></div>
-        </dl>
-        <p>Check the destination and exact name before you continue. Approval requires passkey user verification.</p>
-        <div class="actions">
-          <button id="approve-request" type="button">Approve and verify</button>
-          <button id="retry-connection" class="secondary" type="button" hidden>Retry connection</button>
-          <button id="cancel-request" class="secondary" type="button">Cancel</button>
-        </div>
-      </section>
-
-      <section id="destination-panel" aria-labelledby="destination-title" hidden>
-        <h2 id="destination-title">Accept this destination</h2>
-        <dl class="request-details">
-          <div><dt>Machine prefix</dt><dd id="destination-prefix"></dd></div>
-          <div><dt>DNS suffix</dt><dd id="destination-suffix"></dd></div>
-          <div><dt>Full destination</dt><dd id="destination-host"></dd></div>
-        </dl>
-        <p id="destination-note">Accepting remembers this prefix and suffix when browser storage is available. It does not approve a secret request.</p>
-        <div class="actions">
-          <button id="accept-destination" type="button" disabled>Accept this destination</button>
-          <button id="decline-destination" class="secondary" type="button" disabled>Cancel</button>
-        </div>
-      </section>
-
-      <section id="setup-panel" aria-labelledby="create-passkey-title">
-        <h2 id="create-passkey-title">Create passkey</h2>
-        <label for="passkey-label">Passkey label</label>
-        <input id="passkey-label" type="text" value="creds passkey" maxlength="64" autocomplete="off">
-        <button id="create-passkey" type="button">Create passkey and export public key</button>
-      </section>
-
-      <section id="settings-panel" aria-labelledby="settings-title">
-        <h2 id="settings-title">Browser settings</h2>
-        <p>These public settings belong to this browser profile and origin. The CLI still trusts only its independently configured public key.</p>
-        <fieldset id="settings-controls">
+      <section id="setup-panel" class="page" aria-labelledby="setup-title" hidden>
+        <h1 id="setup-title" tabindex="-1">Set up this browser</h1>
+        <p class="intro">Add the machine DNS suffix used by your CLI.</p>
+        <div class="field">
           <label for="dns-suffix">Machine DNS suffix</label>
-          <input id="dns-suffix" type="text" autocomplete="off" spellcheck="false" placeholder="your-tailnet.ts.net" aria-describedby="suffix-help">
-          <p id="suffix-help">Enter a DNS suffix only. The app hostname and WebAuthn RP ID remain unchanged.</p>
-          <button id="save-settings" type="button">Save settings</button>
+          <input id="dns-suffix" type="text" autocomplete="off" spellcheck="false" placeholder="tailnet.example">
+        </div>
+        <div class="actions">
+          <button id="save-settings" class="button button-primary" type="button">Continue</button>
+        </div>
+        <p id="result" class="status" role="status" aria-live="polite" hidden></p>
+      </section>
 
-          <label for="public-key">Public key (base64url DER SPKI)</label>
-          <input id="public-key" type="text" autocomplete="off" spellcheck="false" aria-describedby="public-key-help">
-          <div class="actions">
-            <button id="copy-public-key" class="secondary" type="button">Copy public key</button>
-            <button id="save-public-key" type="button">Save public key</button>
-          </div>
-          <p id="public-key-help">Save this public setup material for <code>creds setup</code>. Importing a key does not create a passkey or change CLI trust. The matching private key stays with the passkey provider.</p>
+      <section id="ready-panel" class="page" aria-labelledby="ready-title" hidden>
+        <h1 id="ready-title" tabindex="-1">Open a request from your terminal.</h1>
+        <p id="result-ready" class="status" role="status" aria-live="polite" hidden></p>
+      </section>
 
-          <h3>Accepted destinations</h3>
-          <p>Accepted prefixes apply only to the saved suffix. Every secret request still needs passkey approval.</p>
-          <ul id="accepted-prefixes" class="accepted-prefixes"></ul>
-          <p id="accepted-empty">No destinations are remembered.</p>
+      <section id="needs-settings-panel" class="page" aria-labelledby="needs-settings-title" hidden>
+        <h1 id="needs-settings-title" tabindex="-1">Set up this browser</h1>
+        <p class="intro">Save your machine DNS suffix to continue.</p>
+        <p id="needs-settings-status" class="status" role="status" aria-live="polite" hidden></p>
+        <div class="actions">
+          <a class="button button-primary" href="#settings" data-open-settings>Settings</a>
+          <button id="cancel-needs-settings" class="button button-secondary" type="button">Cancel</button>
+        </div>
+      </section>
+
+      <section id="destination-panel" class="page" aria-labelledby="destination-title" hidden>
+        <h1 id="destination-title" class="host-title" tabindex="-1"><span id="destination-host"></span></h1>
+        <p id="destination-note" class="intro">Remembering skips this prompt; every request still needs approval.</p>
+        <p id="result-destination" class="status" role="status" aria-live="polite" hidden></p>
+        <div class="actions">
+          <button id="accept-destination" class="button button-primary" type="button" disabled>Remember this machine and continue</button>
+          <button id="decline-destination" class="button button-secondary" type="button" disabled>Cancel</button>
+        </div>
+      </section>
+
+      <section id="approval-panel" class="page" aria-labelledby="approval-title" hidden>
+        <h1 id="approval-title" tabindex="-1">
+          <span id="request-operation" class="operation"></span>
+          <span id="request-name" class="secret-name"></span>
+        </h1>
+        <p id="request-host" class="host"></p>
+        <p class="revision">Revision <span id="request-revision"></span></p>
+        <details class="request-details">
+          <summary>Request details</summary>
+          <dl class="fact-list">
+            <dt>Machine prefix</dt><dd id="request-prefix"></dd>
+            <dt>DNS suffix</dt><dd id="request-suffix"></dd>
+          </dl>
+        </details>
+        <p id="result-request" class="status" role="status" aria-live="polite" hidden></p>
+        <div class="actions">
+          <button id="approve-request" class="button button-primary" type="button" disabled>Approve</button>
+          <button id="retry-connection" class="button button-secondary" type="button" hidden>Retry connection</button>
+          <button id="cancel-request" class="button button-secondary" type="button">Cancel</button>
+        </div>
+      </section>
+
+      <section id="settings-panel" class="page" aria-labelledby="settings-title" hidden>
+        <h1 id="settings-title" tabindex="-1">Settings</h1>
+        <fieldset id="settings-controls">
+          <section class="setting-section" aria-labelledby="suffix-title">
+            <h2 id="suffix-title">Machine DNS suffix</h2>
+            <label class="sr-only" for="dns-suffix-settings">Machine DNS suffix</label>
+            <input id="dns-suffix-settings" type="text" autocomplete="off" spellcheck="false" placeholder="tailnet.example">
+            <button id="save-settings-from-page" class="button button-primary button-small" type="button">Save</button>
+          </section>
+
+          <section class="setting-section" aria-labelledby="saved-key-title">
+            <h2 id="saved-key-title">Saved public key</h2>
+            <div class="key-preview">
+              <code id="saved-key-preview">No key saved</code>
+              <button id="copy-public-key" class="button button-secondary button-small" type="button" aria-label="Copy saved public key" hidden>Copy</button>
+            </div>
+            <details>
+              <summary>Show full key</summary>
+              <div class="detail-body"><code id="saved-key-full">No public setup key saved</code></div>
+            </details>
+          </section>
+
+          <section class="setting-section" aria-labelledby="more-settings-title">
+            <h2 id="more-settings-title">More settings</h2>
+            <details>
+              <summary>Create a passkey</summary>
+              <div class="detail-body">
+                <label for="passkey-label">Passkey label</label>
+                <input id="passkey-label" type="text" value="creds passkey" maxlength="64" autocomplete="off">
+                <button id="create-passkey" class="button button-secondary button-small" type="button">Create passkey and export public key</button>
+              </div>
+            </details>
+            <details>
+              <summary>Import or replace public key</summary>
+              <div class="detail-body">
+                <label for="public-key">Public setup key</label>
+                <textarea id="public-key" autocomplete="off" spellcheck="false" placeholder="Paste base64url DER SPKI public key"></textarea>
+                <button id="save-public-key" class="button button-secondary button-small" type="button">Save public key</button>
+                <p class="field-help">Importing a key does not create a passkey or change CLI trust.</p>
+              </div>
+            </details>
+            <details>
+              <summary>Manage remembered destinations</summary>
+              <div class="detail-body">
+                <ul id="accepted-prefixes" class="accepted-prefixes"></ul>
+                <p id="accepted-empty" class="quiet-copy">No remembered destinations.</p>
+              </div>
+            </details>
+          </section>
         </fieldset>
-        <button id="reset-settings" class="secondary" type="button">Reset browser settings</button>
-        <p id="settings-status" role="status" aria-live="polite"></p>
+        <details class="reset-settings">
+          <summary>Reset browser settings</summary>
+          <div class="detail-body">
+            <button id="reset-settings" class="button button-secondary button-small" type="button">Reset settings</button>
+          </div>
+        </details>
+        <p id="settings-status" class="status" role="status" aria-live="polite" hidden></p>
       </section>
 
-      <section class="result" aria-labelledby="result-title">
-        <h2 id="result-title">Result</h2>
-        <pre id="result" role="status" aria-live="polite">Ready. Create a passkey for local CLI setup or approve a CLI request.</pre>
+      <section id="outcome-panel" class="page" aria-labelledby="outcome-message" hidden>
+        <h1 id="outcome-message" tabindex="-1"></h1>
+        <div class="actions"><button id="outcome-done" class="button button-primary" type="button">Done</button></div>
       </section>
-      <footer id="page-footer">Passkeys stay with your authenticator or passkey provider. The browser stores only the validated public key, DNS suffix, and accepted machine prefixes.</footer>
     </main>
   </body>
 </html>
