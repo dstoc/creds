@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.4.0](https://github.com/dstoc/creds/compare/v0.3.0...v0.4.0) (2026-10-25)
+
+
+### Features
+
+* add configurable QR rendering modes ([#27](https://github.com/dstoc/creds/issues/27)) ([cd5ced9](https://github.com/dstoc/creds/commit/cd5ced9d3de2dd9ae8c4dd636b17c5f4aebdc78a))
+* **cli:** add help, version, and argument parsing ([#23](https://github.com/dstoc/creds/issues/23)) ([bbee444](https://github.com/dstoc/creds/commit/bbee4447206cf4b0b4885ccbab38897a7a648baa))
+* **cli:** simplify setup, check, and approval output ([#25](https://github.com/dstoc/creds/issues/25)) ([e2c9a52](https://github.com/dstoc/creds/commit/e2c9a52e4bc605bd33c93cfdd9c3b586a2dc084f))
+* **web:** restore first-time passkey setup choices ([#19](https://github.com/dstoc/creds/issues/19)) ([d68ae73](https://github.com/dstoc/creds/commit/d68ae73fe71e0cd436f3daae0d82bd72f6c05127))
+
+
+### Bug Fixes
+
+* **cli:** add contextual command diagnostics ([#24](https://github.com/dstoc/creds/issues/24)) ([22a6e80](https://github.com/dstoc/creds/commit/22a6e80bfa6265ebaf1556dfef1064629c9641a1))
+* **web:** remove duplicate settings separators ([#21](https://github.com/dstoc/creds/issues/21)) ([5db9df2](https://github.com/dstoc/creds/commit/5db9df2111abf47b3eaa34f6edcb2dc7238a873d))
+* **web:** simplify passkey setup copy ([#22](https://github.com/dstoc/creds/issues/22)) ([d67e30a](https://github.com/dstoc/creds/commit/d67e30ad13e3c196ff514f479abd57a8892f4955))
+
 ## [0.3.0](https://github.com/dstoc/creds/compare/v0.2.0...v0.3.0) (2026-10-25)
 
 
