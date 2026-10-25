@@ -53,9 +53,21 @@ The web page has a separate **Create passkey** action. Create a discoverable cre
 
 After creation, run a PRF evaluation to confirm support. Fail explicitly if no result is returned. Obtain the credential public key using `response.getPublicKey()` and check `getPublicKeyAlgorithm() === -7`. Display its DER SubjectPublicKeyInfo bytes as unpadded base64url in a copyable setup field. Fail if the public key cannot be exported. Do not parse attestation or request attestation certificates.
 
-The user runs `creds setup` and enters the app URL, local hostname label, secret storage directory and public-key string through interactive prompts. The CLI validates that it is an ES256 P-256 public key and saves it in local configuration. Derive the expected origin from the configured app URL and fix the RP ID to that URL’s hostname; the web app uses that hostname for its origin and RP ID. Configure the machine DNS suffix separately in the trusted static web app deployment. Show a fingerprint for confirmation. Setup is an explicit local trust decision; never enroll or replace a key through a network operation. Refuse to replace existing configuration unless the user explicitly requests replacement during setup. One trusted credential per CLI configuration is enough for v1.
+The user runs `creds setup` and enters the app URL, local hostname label, secret storage directory and public-key string through interactive prompts. The CLI validates that it is an ES256 P-256 public key and saves it in local configuration. Derive the expected origin from the configured app URL and fix the RP ID to that URL’s hostname; the web app uses that hostname for its origin and RP ID. The user enters the machine DNS suffix in browser settings. Show a fingerprint for confirmation. Setup is an explicit local trust decision; never enroll or replace a key through a network operation. Refuse to replace existing configuration unless the user explicitly requests replacement during setup. One trusted credential per CLI configuration is enough for v1.
 
-The web app needs no persistent application storage. The public key is exported during creation and thereafter retained only by the CLI. Normal browser operations omit `allowCredentials`; the user selects the discoverable passkey. Store no credential ID or public key in the encrypted file, and send neither public key nor registration material during normal operations. Selecting a different passkey fails CLI signature verification before encryption or decryption.
+Normal browser operations omit `allowCredentials`; the user selects the discoverable passkey. Store no credential ID or public key in the encrypted file, and send neither public key nor registration material during normal operations. Selecting a different passkey fails CLI signature verification before encryption or decryption.
+
+### Browser settings and remembered destinations (approved follow-up, creds/14)
+
+The static app stores one origin-local JSON record under `creds.settings.v1`: version 1, a nullable unpadded base64url DER SPKI public key, a user-configured DNS suffix, and up to 128 accepted machine prefixes. The serialized record is limited to 32 KiB. Validate the entire record on load and before saving. Malformed or unsupported records require an explicit reset. If storage is unavailable or a write fails, keep validated values in page memory and state clearly that they were not saved.
+
+Persist only those public settings. Never persist plaintext, ciphertext, PRF output, derived keys, assertions, handoff URLs, certificate pins or request identifiers. Clearing site data removes these settings, but it does not remove a passkey or change CLI setup. A retained public key is a setup convenience only. The CLI continues to verify assertions with its independently configured public key. Importing a public key validates the DER SPKI as ECDSA P-256; it does not create a passkey, prove possession, enroll a credential or change CLI trust.
+
+The user saves the suffix without editing deployed files. Trim surrounding whitespace, lowercase ASCII letters, validate DNS labels, reject IP literals and URL components, and validate the prefix plus suffix against the combined hostname limit. The app hostname continues to define the Origin and RP ID. The QR supplies one prefix, port, certificate pin and request ID. Remove its fragment from browser history before configuration and keep it only in page memory until the handoff is completed or cancelled. The QR cannot replace the saved suffix.
+
+Accepted prefixes apply only to the current suffix. A changed canonical suffix clears acceptances; saving the same canonical suffix preserves them. A new port or certificate pin does not alter remembered identity. Acceptance is an explicit local action before connection and invokes no WebAuthn ceremony or key derivation. A remembered prefix skips only that preliminary prompt. Every request still displays the full destination, prefix, suffix, exact name, revision and operation, and requires **Approve and verify**.
+
+Freeze the destination and request during a live session. Disable settings edits until the session is cancelled or closed. Settings changes in another tab apply only to future handoffs. When the accepted-prefix list is full, permit a clearly labeled one-time acceptance without persistence. Do not claim persistence after a failed write.
 
 Losing the CLI configuration requires importing the same public key from a retained setup string or another configured CLI; an ordinary assertion cannot export it again. This public setup material is safe to retain. Recreating a passkey produces different encryption keys and does not recover existing ciphertext.
 
@@ -146,11 +158,11 @@ public_key = "<unpadded base64url DER SubjectPublicKeyInfo>"
 listen_addr = "0.0.0.0:0"
 ```
 
-Required fields are `app_url`, `hostname`, `storage_dir`, and `public_key`. Reject unknown or duplicate fields. `hostname` is the single DNS label advertised in the QR; it need not equal the OS hostname. The web app appends its deployment-configured DNS suffix. The suffix remains web-app configuration and is not overridden by the CLI or QR.
+Required fields are `app_url`, `hostname`, `storage_dir`, and `public_key`. Reject unknown or duplicate fields. `hostname` is the single DNS label advertised in the QR; it need not equal the OS hostname. The web app appends the user's saved DNS suffix. The suffix remains browser settings and is not overridden by the CLI or QR.
 
 Require an HTTPS app URL without credentials, query or fragment; permit a deployment path. Derive the expected WebAuthn origin from its scheme/host/port and RP ID from its hostname. This avoids independent settings that could disagree. Fix RP ID to the exact app hostname in v1 rather than supporting parent-domain RP IDs.
 
-`listen_addr` optionally selects a bind IP and UDP port. Port zero lets the OS allocate a port, which the CLI advertises in the URL. A fixed port can be configured if network policy requires one. The machine label combined with the web app's configured DNS suffix must resolve to a reachable address on the chosen listener. Do not add a CLI DNS-suffix setting, separate port, configurable timeout, algorithm or per-secret settings. Keep the 30-second connection-setup timeout and two-minute approval window fixed.
+`listen_addr` optionally selects a bind IP and UDP port. Port zero lets the OS allocate a port, which the CLI advertises in the URL. A fixed port can be configured if network policy requires one. The machine label combined with the user's saved DNS suffix must resolve to a reachable address on the chosen listener. Do not add a CLI DNS-suffix setting, separate port, configurable timeout, algorithm or per-secret settings. Keep the 30-second connection-setup timeout and two-minute approval window fixed.
 
 `creds setup` creates the config and storage directory and accepts the pasted public key. Default the storage directory to `$XDG_DATA_HOME/creds/secrets`, or `~/.local/share/creds/secrets`. Ask before explicitly replacing existing configuration; ordinary commands never modify the pinned key. Setup does not retain browser state, register an account, or write an encryption key.
 
@@ -174,7 +186,9 @@ https://keys.example/#v=1&host=workstation&port=8443&cert=...&request=...
 
 `cert` is unpadded base64url SHA-256 of the complete DER certificate; `request` is unpadded base64url. Avoid a custom compact encoding in v1. The page reads the fragment into memory and immediately removes it with `history.replaceState`. The URL contains connection material, never a derived key or plaintext.
 
-The app accepts only one DNS label for `host`, validates the trusted deployment-configured machine DNS suffix and combined hostname, validates the port, and checks decoded field lengths and version. It constructs `https://<host>.<configured-machine-suffix>:<port>/key`; the machine suffix can differ from the approval app hostname. The QR does not carry the suffix and the app rejects arbitrary destination URLs, path overrides, or suffix overrides. The configured app URL continues to define the expected Origin and RP ID. Both devices must resolve and reach the machine address over UDP; there is no relay or transport fallback.
+The app accepts only one DNS label for `host`, validates the user-configured machine DNS suffix and combined hostname, validates the port, and checks decoded field lengths and version. It constructs `https://<host>.<configured-machine-suffix>:<port>/key`; the machine suffix can differ from the approval app hostname. The QR does not carry the suffix and the app rejects arbitrary destination URLs, path overrides, or suffix overrides. The configured app URL continues to define the expected Origin and RP ID. Both devices must resolve and reach the machine address over UDP; there is no relay or transport fallback.
+
+The HTML and HTTP content security policies use `connect-src https:` so the app can reach user-configured suffixes. Multiple policies intersect, so keep both policies aligned. CSP no longer provides a per-tailnet connection allowlist. The app validates and constructs the destination from the saved suffix and QR prefix, and WebTransport applies the certificate pin from that QR. Keep same-origin script and style restrictions and the HTTP `frame-ancestors 'none'` header.
 
 Use `serverCertificateHashes` to pin the SHA-256 certificate hash. The CLI accepts only the configured app Origin. The request identifier identifies the pending operation; it is not a bearer authorization. Knowing all URL fields does not authorize supplying an encryption key. The pinned WebAuthn public key authenticates the browser response.
 
@@ -213,7 +227,7 @@ Missing PRF output, declined verification, unsupported APIs, certificate mismatc
 
 A decryption tag failure reports that the key does not match or the file is damaged; it cannot reliably distinguish these cases. Preserve the existing encrypted file until the atomic replacement commit point. A failed or cancelled approval never consumes a revision or changes the current file.
 
-Keep keys out of arguments, environment variables, logs, browser storage and application-managed temporary files. Clear Rust key buffers with `zeroize` and discard browser references promptly. JavaScript copies, runtime internals, swap and crash dumps prevent a promise of complete memory erasure. The goal is no deliberate persistent key storage.
+Keep derived keys and plaintext out of arguments, environment variables, logs, browser storage and application-managed temporary files. The only browser-persisted public setup material is the public settings record described above. Clear Rust key buffers with `zeroize` and discard browser references promptly. JavaScript copies, runtime internals, swap and crash dumps prevent a promise of complete memory erasure. The goal is no deliberate persistent key storage.
 
 ## Implementation shape
 
@@ -256,14 +270,14 @@ Implement in this order:
 - Existing plaintext destination files survive refusal or failure. A stored envelope with a name different from the requested name or an invalid revision fails before approval. Test revision overflow, deleting a file, and restoring an older envelope.
 - Diagnostics do not contaminate plaintext stdout; no key appears in logs or persistent browser state.
 - `creds check` succeeds for valid local setup and fails for missing config, invalid public keys or invalid storage directories without opening a listener or changing files. Test explicit config paths and relative storage paths independently of the working directory.
-- Manually test creation, approval, wrong-passkey failure, and repeat decryption on the supported browser/authenticator combination. Confirm the app can be reloaded with no persistent application storage and complete operations using only CLI-side public-key configuration.
+- Manually test creation, approval, wrong-passkey failure, and repeat decryption on the supported browser/authenticator combination. Confirm validated public settings reload, while key material and handoff data remain unpersisted, and complete operations using the CLI-side public-key configuration.
 - Setup rejects malformed/non-P-256 public keys and accidental replacement. Unknown credentials fail without a trust prompt or ciphertext output. Confirm only one WebAuthn ceremony is needed per normal operation.
 
 ## Success criteria
 
 - A user can encrypt and decrypt a logical secret through explicit browser approval, with automatic revision increments and only one stored encrypted value.
 - Successful encryption atomically replaces the current envelope; failures before publication preserve it.
-- Only the current ciphertext, public configuration (including the pinned credential public key), and empty lock sidecars need persist between operations.
+- Only the current ciphertext, public configuration (including the pinned credential public key), public browser settings, and empty lock sidecars need persist between operations.
 - Possession of the QR URL alone cannot authorize a key response or inject an encryption key.
 - The trusted web app and temporary CLI communicate directly without a backend or normal PKI certificate for the CLI.
 - The protocol, KDF and file format each have one version and one implementation path.

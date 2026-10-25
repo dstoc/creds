@@ -1,5 +1,6 @@
 import { decodeBase64Url, encodeBase64Url } from "./encoding.mjs";
 import { validateName, validateRevision } from "./envelope.mjs";
+import { validateCombinedHostname } from "./settings.mjs";
 
 const MAX_FRAME_BYTES = 16 * 1024;
 
@@ -9,17 +10,8 @@ function oneParameter(params, name) {
   return values[0];
 }
 
-export function parseHandoffFragment(fragment, pageLocation = globalThis.location, configuredDnsSuffix) {
+export function parseHandoffFragment(fragment, pageLocation = globalThis.location) {
   if (pageLocation?.protocol !== "https:") throw new TypeError("The creds approval page must use HTTPS.");
-  if (
-    typeof configuredDnsSuffix !== "string" ||
-    configuredDnsSuffix.length > 253 ||
-    configuredDnsSuffix !== configuredDnsSuffix.toLowerCase() ||
-    !configuredDnsSuffix.split(".").every((label) => /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/u.test(label)) ||
-    /^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$/u.test(configuredDnsSuffix)
-  ) {
-    throw new TypeError("The configured machine DNS suffix is invalid.");
-  }
   const params = new URLSearchParams(fragment.startsWith("#") ? fragment.slice(1) : fragment);
   const allowed = new Set(["v", "host", "port", "cert", "request"]);
   for (const name of params.keys()) {
@@ -35,8 +27,6 @@ export function parseHandoffFragment(fragment, pageLocation = globalThis.locatio
   if (!/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$/u.test(host)) {
     throw new TypeError("The handoff host must be one DNS label.");
   }
-  const fullHostname = `${host}.${configuredDnsSuffix}`;
-  if (fullHostname.length > 253) throw new TypeError("The handoff hostname is too long.");
   if (!/^[1-9][0-9]{0,4}$/u.test(portText)) throw new TypeError("The handoff port is invalid.");
   const port = Number(portText);
   if (port > 65535) throw new TypeError("The handoff port must be from 1 through 65535.");
@@ -45,14 +35,23 @@ export function parseHandoffFragment(fragment, pageLocation = globalThis.locatio
   if (certificatePin.byteLength !== 32) throw new TypeError("The SHA-256 certificate hash must be 32 bytes.");
   if (requestBytes.byteLength !== 32) throw new TypeError("The request identifier must be 32 bytes.");
   return Object.freeze({
-    host,
-    fullHostname,
+    prefix: host.toLowerCase(),
     port,
     certificateHash,
     certificatePin,
     requestId,
     requestBytes,
-    endpoint: `https://${fullHostname}:${port}/key`,
+  });
+}
+
+export function buildHandoffDestination(handoff, configuredDnsSuffix) {
+  const destination = validateCombinedHostname(handoff?.prefix, configuredDnsSuffix);
+  return Object.freeze({
+    ...handoff,
+    prefix: destination.prefix,
+    suffix: destination.suffix,
+    fullHostname: destination.fullHostname,
+    endpoint: `https://${destination.fullHostname}:${handoff.port}/key`,
   });
 }
 

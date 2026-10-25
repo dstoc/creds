@@ -19,7 +19,7 @@ class StaticHandler(SimpleHTTPRequestHandler):
             "Content-Security-Policy",
             "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; "
             "img-src 'self' data:; script-src 'self'; style-src 'self'; "
-            "connect-src 'self' https://*.localhost:* https://*.tailnet.example.net:* https://127.0.0.1:*; object-src 'none'",
+            "connect-src https:; object-src 'none'",
         )
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Referrer-Policy", "no-referrer")

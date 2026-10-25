@@ -9,6 +9,8 @@ python3 -m unittest discover -s scripts -p 'test_*.py'
 node --check scripts/virtual-authenticator.mjs
 node --check web/js/main.mjs
 node --check web/js/main.test.mjs
+node --check web/js/settings.mjs
+node --check web/js/settings.test.mjs
 node --check web/js/envelope.mjs
 node --check web/js/envelope.test.mjs
 node --check web/js/transport.mjs
@@ -22,6 +24,7 @@ node --check dev/browser-compatibility/webauthn-probe.mjs
 node --check dev/browser-compatibility/webauthn-probe.test.mjs
 node --test web/js/encoding.test.mjs
 node --test web/js/main.test.mjs
+node --test web/js/settings.test.mjs
 node --test web/js/envelope.test.mjs
 node --test web/js/transport.test.mjs
 node --test web/js/webauthn.test.mjs
