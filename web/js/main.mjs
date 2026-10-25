@@ -107,7 +107,6 @@ function renderAcceptedPrefixes() {
     forget.type = "button";
     forget.className = "secondary";
     forget.textContent = "Forget";
-    forget.disabled = settingsControls.disabled;
     forget.addEventListener("click", () => { void forgetPrefix(prefix); });
     row.append(label, forget);
     acceptedPrefixesList.append(row);
@@ -146,6 +145,7 @@ function expireApproval() {
   approvalSession.close();
   approveButton.disabled = true;
   cancelButton.disabled = true;
+  setSettingsEditable(true);
   show("The CLI approval window expired. Start a new CLI operation.");
 }
 
@@ -538,6 +538,7 @@ approveButton.addEventListener("click", async () => {
     clearApprovalTimeout();
     show("Approval sent. Check the CLI for the operation result.");
     cancelButton.disabled = true;
+    setSettingsEditable(!approvalSession?.isActive());
   } catch (error) {
     if (approvalExpired) {
       show("The CLI approval window expired. Start a new CLI operation.");

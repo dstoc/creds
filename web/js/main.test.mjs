@@ -385,6 +385,7 @@ test("successful passkey setup saves its exported public key and forgetting remo
   assert.match(ui.element("#result").textContent, /public key is saved/u);
 
   const forgetButton = ui.element("#accepted-prefixes").children[0].children[1];
+  assert.equal(forgetButton.disabled, false, "Forget is enabled after settings load");
   await forgetButton.handlers.click();
   await settle();
   assert.deepEqual(ui.writes[1].acceptedPrefixes, ["laptop"]);
@@ -520,6 +521,7 @@ test("the browser closes an established request when its two-minute approval win
   assert.equal(ui.element("#approve-request").disabled, true);
   assert.equal(ui.element("#cancel-request").disabled, true);
   assert.match(ui.element("#result").textContent, /approval window expired/u);
+  assert.equal(ui.element("#settings-controls").disabled, false);
 });
 
 test("approval expiry closes the session and clears the key while transmission is pending", async () => {
@@ -643,4 +645,17 @@ test("one explicit approval runs one ceremony and sends only on its live session
   assert.deepEqual(session.sent[0].key, new Uint8Array(32).fill(0x5a));
   assert.equal(key.every((byte) => byte === 0), true, "page clears its key reference after sending");
   assert.equal(ui.element("#cancel-request").disabled, true);
+});
+
+test("successful transmission restores settings after the session closes without a failure event", async () => {
+  const session = createSession();
+  session.sendKey = async () => { session.close(); };
+  const ui = startApprovalUi({ connectHandoff: async () => session });
+  await settle();
+
+  assert.equal(ui.element("#settings-controls").disabled, true);
+  await ui.click("#approve-request");
+
+  assert.equal(session.closed, true);
+  assert.equal(ui.element("#settings-controls").disabled, false);
 });
