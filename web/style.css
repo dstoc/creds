@@ -162,7 +162,6 @@ fieldset:disabled { cursor: not-allowed; }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
 details + details { border-top: 1px solid var(--line); }
 .setting-section details { border-top: 1px solid var(--line); }
-.setting-section details:last-child { border-bottom: 1px solid var(--line); }
 .reset-settings { margin-top: 20px; border-top: 1px solid var(--line); }
 .detail-body .button { margin-top: 12px; }
 #settings-controls:disabled button { cursor: not-allowed; }
