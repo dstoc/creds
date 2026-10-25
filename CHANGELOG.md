@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.3.0](https://github.com/dstoc/creds/compare/v0.2.0...v0.3.0) (2026-10-25)
+
+
+### Features
+
+* add browser settings and remembered destinations ([#17](https://github.com/dstoc/creds/issues/17)) ([09328d5](https://github.com/dstoc/creds/commit/09328d56be17f169dfb427706978e968abe2c2db))
+* **web:** adopt simplified Astra UI ([#18](https://github.com/dstoc/creds/issues/18)) ([4742962](https://github.com/dstoc/creds/commit/47429625dcd638c6356672424f83ad0593ae5b9b))
+
+
+### Bug Fixes
+
+* resolve draft releases by ID ([#15](https://github.com/dstoc/creds/issues/15)) ([9dda5a7](https://github.com/dstoc/creds/commit/9dda5a7e92928a5e15c4731863410dc976d7712e))
+
 ## [0.2.0](https://github.com/dstoc/creds/compare/v0.1.0...v0.2.0) (2026-10-24)
 
 
