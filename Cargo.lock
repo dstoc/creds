@@ -360,11 +360,11 @@ dependencies = [
  "base64 0.23.1",
  "ciborium",
  "clap",
+ "creds-qr-rendering",
  "fs2",
  "getrandom 0.4.3",
  "hkdf",
  "p256",
- "qrcode",
  "rcgen",
  "serde",
  "serde_json",
@@ -375,6 +375,14 @@ dependencies = [
  "url",
  "wtransport",
  "zeroize",
+]
+
+[[package]]
+name = "creds-qr-rendering"
+version = "0.1.0"
+dependencies = [
+ "base64 0.23.1",
+ "qrcode",
 ]
 
 [[package]]

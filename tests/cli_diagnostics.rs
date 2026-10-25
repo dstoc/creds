@@ -108,6 +108,23 @@ fn missing_and_malformed_config_errors_name_the_config_and_suggest_setup() {
 }
 
 #[test]
+fn invalid_qr_mode_reports_the_supported_configuration_values() {
+    let directory = ScratchDirectory::new();
+    let config = ValidConfig::new(&directory);
+    let contents = format!(
+        "{}qr_mode = \"pixels\"\n",
+        fs::read_to_string(&config.config).expect("read synthetic config")
+    );
+    fs::write(&config.config, contents).expect("write invalid synthetic QR mode");
+    set_mode(&config.config, 0o600);
+
+    let output = run(&["--config", config.config.to_str().unwrap(), "check"]);
+    let stderr = assert_plain_failure(&output);
+    assert!(stderr.contains("invalid qr_mode \"pixels\""), "{stderr}");
+    assert!(stderr.contains("braille, sextant, half, kitty"), "{stderr}");
+}
+
+#[test]
 fn missing_input_file_has_path_context() {
     let directory = ScratchDirectory::new();
     let missing = directory.path().join("input.bin");

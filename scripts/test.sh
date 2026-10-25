@@ -2,8 +2,8 @@
 set -eu
 
 cargo fmt --all -- --check
-cargo clippy --locked --all-targets --all-features -- -D warnings
-cargo test --locked --all-targets
+cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+cargo test --locked --workspace --all-targets
 cargo test --locked --bin creds-probe-server --features dev-tools
 python3 -m unittest discover -s scripts -p 'test_*.py'
 node --check scripts/virtual-authenticator.mjs

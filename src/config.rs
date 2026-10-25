@@ -9,6 +9,7 @@ use std::{
 };
 
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+use creds_qr_rendering::Mode as QrMode;
 use p256::{ecdsa::VerifyingKey, pkcs8::DecodePublicKey};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -27,6 +28,8 @@ pub struct ConfigValues {
     pub public_key: String,
     #[serde(default = "default_listen_addr")]
     pub listen_addr: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub qr_mode: Option<String>,
 }
 
 #[derive(Debug)]
@@ -38,6 +41,7 @@ pub struct ValidatedConfig {
     pub hostname: String,
     pub storage_dir: PathBuf,
     pub listen_addr: SocketAddr,
+    pub qr_mode: QrMode,
     pub public_key: VerifyingKey,
     pub public_key_fingerprint: String,
 }
@@ -234,6 +238,12 @@ fn validate_values(
         .listen_addr
         .parse::<SocketAddr>()
         .map_err(|error| invalid(format!("invalid listen_addr: {error}")))?;
+    let qr_mode = values
+        .qr_mode
+        .as_deref()
+        .unwrap_or("half")
+        .parse::<QrMode>()
+        .map_err(|error| invalid(error.to_string()))?;
     let (public_key, public_key_fingerprint) = decode_public_key(&values.public_key)?;
     if require_storage_directory {
         let metadata = fs::metadata(&storage_dir).map_err(|error| {
@@ -269,6 +279,7 @@ fn validate_values(
         hostname: values.hostname,
         storage_dir,
         listen_addr,
+        qr_mode,
         public_key,
         public_key_fingerprint,
     })
@@ -308,6 +319,7 @@ pub fn check(path: &Path, details: bool) -> Result<()> {
         println!("RP ID: {}", validated.rp_id);
         println!("Machine label: {}", validated.hostname);
         println!("UDP listener: {}", validated.listen_addr);
+        println!("QR rendering: {}", validated.qr_mode);
         println!(
             "Pinned public-key fingerprint: {}",
             validated.public_key_fingerprint
@@ -514,9 +526,21 @@ fn write_config(path: &Path, values: &ConfigValues, replace: bool) -> Result<()>
     Err(invalid("could not create a unique temporary configuration file").into())
 }
 
+fn configured_qr_mode(path: &Path) -> Option<String> {
+    let contents = fs::read_to_string(path).ok()?;
+    let document = toml::from_str::<toml::Value>(&contents).ok()?;
+    let mode = document.get("qr_mode")?.as_str()?;
+    mode.parse::<QrMode>().ok().map(|mode| mode.to_string())
+}
+
 pub fn setup(path: &Path) -> Result<()> {
     let path = absolute_path(path)?;
     let replace = path.exists();
+    let prior_qr_mode = if replace {
+        configured_qr_mode(&path)
+    } else {
+        None
+    };
     if replace
         && !confirm(&format!(
             "Configuration {} exists. Replace it?",
@@ -556,6 +580,7 @@ pub fn setup(path: &Path) -> Result<()> {
                 .map(|_| ())
                 .map_err(|error| error.to_string())
         })?,
+        qr_mode: prior_qr_mode,
     };
     let validated = validate_values(&path, values.clone(), false)?;
     values.storage_dir = validated.storage_dir.clone();
@@ -602,6 +627,7 @@ mod tests {
             storage_dir,
             public_key: URL_SAFE_NO_PAD.encode(public_key.as_bytes()),
             listen_addr: "0.0.0.0:0".into(),
+            qr_mode: None,
         }
     }
 
@@ -672,6 +698,60 @@ mod tests {
         assert!(toml::from_str::<ConfigValues>(&unknown).is_err());
         let invalid = "app_url=[]\nhostname='pc'\nstorage_dir='/tmp/secrets'\npublic_key='x'";
         assert!(toml::from_str::<ConfigValues>(invalid).is_err());
+    }
+
+    #[test]
+    fn qr_mode_is_optional_validated_and_retained_by_config_serialization() {
+        let encoded_key = valid_values(PathBuf::from("/tmp/secrets")).public_key;
+        let base = format!(
+            "app_url='https://keys.example/'\nhostname='pc'\nstorage_dir='/tmp/secrets'\npublic_key='{encoded_key}'"
+        );
+        let missing: ConfigValues = toml::from_str(&base).unwrap();
+        assert_eq!(missing.qr_mode, None);
+        let validated = validate_values(Path::new("/tmp/config.toml"), missing, false).unwrap();
+        assert_eq!(validated.qr_mode, QrMode::Half);
+
+        let configured: ConfigValues =
+            toml::from_str(&format!("{base}\nqr_mode='sextant'")).unwrap();
+        assert_eq!(configured.qr_mode.as_deref(), Some("sextant"));
+        let serialized = toml::to_string(&configured).unwrap();
+        assert!(serialized.contains("qr_mode = \"sextant\""));
+
+        let error = validate_values(
+            Path::new("/tmp/config.toml"),
+            ConfigValues {
+                qr_mode: Some("pixels".into()),
+                ..valid_values(PathBuf::from("/tmp/secrets"))
+            },
+            false,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("invalid qr_mode \"pixels\""), "{error}");
+        assert!(error.contains("braille, sextant, half, kitty"), "{error}");
+
+        let default_serialized =
+            toml::to_string(&valid_values(PathBuf::from("/tmp/secrets"))).unwrap();
+        assert!(!default_serialized.contains("qr_mode"));
+    }
+
+    #[test]
+    fn setup_update_preserves_a_valid_configured_qr_mode() {
+        let root = std::env::temp_dir().join(format!(
+            "creds-config-qr-mode-test-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("config.toml");
+        fs::write(&path, "qr_mode = \"braille\"\n").unwrap();
+        assert_eq!(configured_qr_mode(&path).as_deref(), Some("braille"));
+        fs::write(&path, "qr_mode = \"pixels\"\n").unwrap();
+        assert_eq!(configured_qr_mode(&path), None);
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

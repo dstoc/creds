@@ -2,14 +2,14 @@ use std::{
     collections::HashSet,
     error::Error,
     future::Future,
-    io,
+    io::{self, IsTerminal},
     pin::Pin,
     sync::{Arc, Mutex},
     time::Duration,
 };
 
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
-use qrcode::{QrCode, render::unicode::Dense1x2};
+use creds_qr_rendering::{Rendered, encode as encode_qr, render as render_qr};
 use rcgen::{CertificateParams, KeyPair};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -292,14 +292,23 @@ pub async fn receive_key(
         &certificate_pin,
         &request_id,
     )?;
-    let qr_code = QrCode::new(handoff_url.as_str())?;
-    let qr_image = qr_code.render::<Dense1x2>().quiet_zone(true).build();
+    let qr_code = encode_qr(handoff_url.as_str())?;
+    let qr_output = render_qr(&qr_code, config.qr_mode);
 
     eprintln!("Open this URL on the approval device: {handoff_url}");
     eprintln!(
-        "Or scan this QR code (machine label {}, UDP port {port}; the approval app adds its configured DNS suffix):\n{qr_image}",
-        config.hostname
+        "Or scan this {} QR code (machine label {}, UDP port {port}; the approval app adds its configured DNS suffix):",
+        config.qr_mode, config.hostname
     );
+    match qr_output {
+        Rendered::Text(qr_image) => eprintln!("{qr_image}"),
+        Rendered::KittyProtocol(protocol) if kitty_protocol_supported() => {
+            eprintln!("{protocol}");
+        }
+        Rendered::KittyProtocol(_) => eprintln!(
+            "Kitty QR was selected but stderr is not a recognized Kitty graphics terminal; use the URL above."
+        ),
+    }
     eprintln!("Waiting for approval. Press Ctrl-C to cancel.");
 
     if *cancellation.borrow() {
@@ -389,6 +398,35 @@ pub async fn receive_key(
             }
         }
     }
+}
+
+fn kitty_protocol_supported() -> bool {
+    let stderr_is_terminal = io::stderr().is_terminal();
+    let kitty_window_id = std::env::var_os("KITTY_WINDOW_ID").is_some();
+    let wezterm_pane = std::env::var_os("WEZTERM_PANE").is_some();
+    let term = std::env::var("TERM").unwrap_or_default();
+    let term_program = std::env::var("TERM_PROGRAM").unwrap_or_default();
+    recognized_kitty_terminal(
+        stderr_is_terminal,
+        kitty_window_id,
+        wezterm_pane,
+        &term,
+        &term_program,
+    )
+}
+
+fn recognized_kitty_terminal(
+    stderr_is_terminal: bool,
+    kitty_window_id: bool,
+    wezterm_pane: bool,
+    term: &str,
+    term_program: &str,
+) -> bool {
+    stderr_is_terminal
+        && (kitty_window_id
+            || wezterm_pane
+            || term == "xterm-ghostty"
+            || term_program.eq_ignore_ascii_case("ghostty"))
 }
 
 async fn handle_session(
@@ -860,6 +898,45 @@ mod tests {
         atomic::{AtomicBool, Ordering},
     };
     use url::form_urlencoded;
+
+    #[test]
+    fn kitty_graphics_requires_a_terminal_with_a_recognized_protocol_marker() {
+        assert!(!recognized_kitty_terminal(
+            false,
+            true,
+            false,
+            "xterm-kitty",
+            ""
+        ));
+        assert!(recognized_kitty_terminal(
+            true,
+            true,
+            false,
+            "xterm-kitty",
+            ""
+        ));
+        assert!(recognized_kitty_terminal(
+            true,
+            false,
+            true,
+            "xterm-256color",
+            ""
+        ));
+        assert!(recognized_kitty_terminal(
+            true,
+            false,
+            false,
+            "xterm-ghostty",
+            ""
+        ));
+        assert!(!recognized_kitty_terminal(
+            true,
+            false,
+            false,
+            "xterm-256color",
+            ""
+        ));
+    }
 
     #[derive(Clone)]
     struct TestConnection(Arc<AtomicBool>);

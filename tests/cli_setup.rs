@@ -124,8 +124,41 @@ fn setup_validates_answers_and_retries_before_the_next_field() {
     }
     assert!(stderr.contains("Trust this pinned passkey key and save? [y/N]:"));
     assert!(!stderr.contains("30 seconds"));
+    assert!(!stderr.contains("QR rendering mode"));
     assert!(config.is_file());
+    assert!(!fs::read_to_string(&config).unwrap().contains("qr_mode"));
     assert!(storage_dir.is_dir());
+}
+
+#[test]
+fn setup_replacement_preserves_a_configured_qr_mode_without_prompting_for_it() {
+    let directory = ScratchDirectory::new();
+    let config = directory.path().join("config.toml");
+    fs::write(&config, "qr_mode = \"sextant\"\n").unwrap();
+    let storage = directory.path().join("secrets");
+    let input = format!(
+        "y\nhttps://keys.example/path\nworkstation\n{}\n{}\n127.0.0.1:0\ny\n",
+        storage.display(),
+        public_key()
+    );
+    let output = run(
+        &["--config", config.to_str().unwrap(), "setup"],
+        input.as_bytes(),
+        &directory,
+    );
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(!stderr.contains("QR rendering mode"));
+    assert!(
+        fs::read_to_string(config)
+            .unwrap()
+            .contains("qr_mode = \"sextant\"")
+    );
 }
 
 #[test]
@@ -229,6 +262,7 @@ fn check_defaults_to_one_truthful_line_and_details_show_resolved_setup() {
         "RP ID: keys.example",
         "Machine label: workstation",
         "UDP listener: 127.0.0.1:0",
+        "QR rendering: half",
         "Pinned public-key fingerprint: SHA-256:",
         "does not prove passkey possession, network reachability, or secret decryptability",
     ] {
