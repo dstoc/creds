@@ -4,126 +4,97 @@ use creds::{
     protocol::validate_name,
     storage::{self, SecretSnapshot, SecretWriter},
 };
+mod cli;
+
+use clap::{CommandFactory, Parser, error::ErrorKind};
 use std::{
     error::Error,
-    ffi::OsString,
     io::{self, Write},
     path::{Path, PathBuf},
 };
 use tokio::sync::watch;
 
-type ParsedArgs = (String, Vec<OsString>, Option<PathBuf>);
-
-fn usage() -> &'static str {
-    "usage: creds [--config PATH] <setup|check|encrypt NAME INPUT|decrypt NAME OUTPUT>"
-}
-
-fn parse_args() -> Result<ParsedArgs, Box<dyn Error>> {
-    let mut arguments = std::env::args_os().skip(1).peekable();
-    let mut command_args = Vec::new();
-    let mut config_path = None;
-    while let Some(argument) = arguments.next() {
-        if argument == "--config" {
-            if config_path.is_some() {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    "--config may be used only once",
-                )
-                .into());
-            }
-            let Some(path) = arguments.next() else {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    "--config requires a path",
-                )
-                .into());
-            };
-            if path.to_string_lossy().starts_with('-') {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    "--config requires a path",
-                )
-                .into());
-            }
-            config_path = Some(PathBuf::from(path));
-        } else if let Some(path) = argument.to_string_lossy().strip_prefix("--config=") {
-            if config_path.is_some() || path.is_empty() {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    "--config requires one non-empty path",
-                )
-                .into());
-            }
-            config_path = Some(PathBuf::from(path));
-        } else {
-            command_args.push(argument);
-        }
-    }
-    let Some(command) = command_args.first().and_then(|value| value.to_str()) else {
-        return Err(io::Error::new(io::ErrorKind::InvalidInput, usage()).into());
-    };
-    Ok((
-        command.to_owned(),
-        command_args.into_iter().skip(1).collect(),
-        config_path,
-    ))
-}
-
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
-    let (command, extra, explicit_config_path) = parse_args()?;
-    if command == "--help" || command == "-h" {
-        println!("{}", usage());
-        return Ok(());
-    }
-    match command.as_str() {
-        "setup" => {
-            require_no_extra(&extra)?;
-            let path = match explicit_config_path {
-                Some(path) => path,
-                None => config::default_config_path()?,
-            };
+    validate_config_arguments();
+    let cli = match cli::Cli::try_parse() {
+        Ok(cli) => cli,
+        Err(error) if error.kind() == ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand => {
+            cli::Cli::command()
+                .error(ErrorKind::MissingSubcommand, "a command is required")
+                .exit();
+        }
+        Err(error) => error.exit(),
+    };
+    let explicit_config_path = cli.config;
+
+    match cli.command {
+        cli::Commands::Setup => {
+            let path = config_path(explicit_config_path)?;
             config::setup(&path)?;
         }
-        "check" => {
-            require_no_extra(&extra)?;
-            let path = match explicit_config_path {
-                Some(path) => path,
-                None => config::default_config_path()?,
-            };
+        cli::Commands::Check => {
+            let path = config_path(explicit_config_path)?;
             config::check(&path)?;
         }
-        "encrypt" => {
-            let (name, input) = parse_operation_args(&extra)?;
+        cli::Commands::Encrypt { name, input } => {
             let path = config_path(explicit_config_path)?;
-            encrypt(&path, name, input).await?;
+            encrypt(&path, &name, &input).await?;
         }
-        "decrypt" => {
-            let (name, output) = parse_operation_args(&extra)?;
+        cli::Commands::Decrypt { name, output } => {
             let path = config_path(explicit_config_path)?;
-            decrypt(&path, name, output).await?;
+            decrypt(&path, &name, &output).await?;
         }
-        _ => return Err(io::Error::new(io::ErrorKind::InvalidInput, usage()).into()),
     }
     Ok(())
 }
 
-fn require_no_extra(extra: &[OsString]) -> Result<(), io::Error> {
-    if extra.is_empty() {
-        Ok(())
-    } else {
-        Err(io::Error::new(io::ErrorKind::InvalidInput, usage()))
+fn validate_config_arguments() {
+    let mut arguments = std::env::args_os().skip(1);
+    let mut config_seen = false;
+
+    while let Some(argument) = arguments.next() {
+        if argument == "--config" {
+            if config_seen {
+                config_argument_error(
+                    ErrorKind::ArgumentConflict,
+                    "--config may be used only once",
+                );
+            }
+            config_seen = true;
+
+            let Some(path) = arguments.next() else {
+                config_argument_error(
+                    ErrorKind::MissingRequiredArgument,
+                    "--config requires a path",
+                );
+            };
+            if path.as_os_str().is_empty() || path.to_string_lossy().starts_with('-') {
+                config_argument_error(
+                    ErrorKind::MissingRequiredArgument,
+                    "--config requires a path",
+                );
+            }
+        } else if let Some(path) = argument.to_string_lossy().strip_prefix("--config=") {
+            if config_seen {
+                config_argument_error(
+                    ErrorKind::ArgumentConflict,
+                    "--config may be used only once",
+                );
+            }
+            config_seen = true;
+            if path.is_empty() {
+                config_argument_error(
+                    ErrorKind::ValueValidation,
+                    "--config requires one non-empty path",
+                );
+            }
+        }
     }
 }
 
-fn parse_operation_args(extra: &[OsString]) -> Result<(&str, &Path), io::Error> {
-    if extra.len() != 2 {
-        return Err(io::Error::new(io::ErrorKind::InvalidInput, usage()));
-    }
-    let name = extra[0]
-        .to_str()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "secret name must be UTF-8"))?;
-    Ok((name, Path::new(&extra[1])))
+fn config_argument_error(kind: ErrorKind, message: &str) -> ! {
+    cli::Cli::command().error(kind, message).exit()
 }
 
 fn config_path(explicit: Option<PathBuf>) -> Result<PathBuf, Box<dyn Error>> {
