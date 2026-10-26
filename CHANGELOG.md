@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.1](https://github.com/dstoc/creds/compare/v0.4.0...v0.4.1) (2026-10-26)
+
+
+### Bug Fixes
+
+* **qr-rendering:** preserve native QR appearance ([#28](https://github.com/dstoc/creds/issues/28)) ([bd04d38](https://github.com/dstoc/creds/commit/bd04d38680d3c9eceee706c6b9c2267a403dcc6f))
+
 ## [0.4.0](https://github.com/dstoc/creds/compare/v0.3.0...v0.4.0) (2026-10-25)
 
 
