@@ -5,7 +5,6 @@ use qrcode::{Color, QrCode, types::QrResult};
 
 const QUIET_ZONE: usize = 4;
 const KITTY_CHUNK_BYTES: usize = 4096;
-const KITTY_MAX_COLUMNS: usize = 64;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Mode {
@@ -139,7 +138,6 @@ fn render_with_packing(
     let columns = width.div_ceil(modules_wide);
     let rows = height.div_ceil(modules_high);
     let mut output = String::new();
-    output.push_str("\x1b[30;47m");
     for cell_y in 0..rows {
         for cell_x in 0..columns {
             let mut mask = 0_u8;
@@ -159,7 +157,6 @@ fn render_with_packing(
             output.push('\n');
         }
     }
-    output.push_str("\x1b[0m");
     output
 }
 
@@ -215,10 +212,6 @@ fn render_kitty(matrix: &Matrix) -> String {
         }
     }
     let encoded = STANDARD.encode(rgb);
-    let columns = width.min(KITTY_MAX_COLUMNS);
-    // Terminal cells are approximately twice as high as they are wide. This
-    // keeps the square QR image square when the terminal scales it to cells.
-    let rows = columns.div_ceil(2);
     let chunks = encoded.as_bytes().chunks(KITTY_CHUNK_BYTES);
     let chunk_count = chunks.len();
     let mut output = String::with_capacity(encoded.len() + chunk_count * 32);
@@ -226,7 +219,7 @@ fn render_kitty(matrix: &Matrix) -> String {
         let more = u8::from(index + 1 < chunk_count);
         if index == 0 {
             output.push_str(&format!(
-                "\x1b_Ga=T,f=24,s={width},v={height},c={columns},r={rows},q=2,m={more};"
+                "\x1b_Ga=T,f=24,s={width},v={height},q=2,m={more};"
             ));
         } else {
             output.push_str(&format!("\x1b_Gm={more};"));
@@ -241,54 +234,6 @@ fn render_kitty(matrix: &Matrix) -> String {
 mod tests {
     use super::*;
 
-    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-    enum TestColor {
-        Black,
-        White,
-    }
-
-    fn effective_colors(
-        text: &str,
-        default_fg: TestColor,
-        default_bg: TestColor,
-    ) -> (TestColor, TestColor) {
-        let mut foreground = default_fg;
-        let mut background = default_bg;
-        let mut first_character_colors = None;
-        let mut chars = text.chars();
-        while let Some(character) = chars.next() {
-            if character == '\x1b' {
-                assert_eq!(chars.next(), Some('['));
-                let mut parameters = String::new();
-                loop {
-                    let parameter = chars.next().expect("complete SGR sequence");
-                    if parameter == 'm' {
-                        break;
-                    }
-                    parameters.push(parameter);
-                }
-                for parameter in parameters.split(';') {
-                    match parameter {
-                        "0" => {
-                            foreground = default_fg;
-                            background = default_bg;
-                        }
-                        "30" => foreground = TestColor::Black,
-                        "47" => background = TestColor::White,
-                        _ => panic!("unexpected SGR parameter {parameter:?}"),
-                    }
-                }
-            } else if first_character_colors.is_none() {
-                first_character_colors = Some((foreground, background));
-            }
-        }
-        assert_eq!(
-            first_character_colors,
-            Some((TestColor::Black, TestColor::White))
-        );
-        (foreground, background)
-    }
-
     fn known_matrix() -> Matrix {
         Matrix::from_rows(&[
             &[true, false, true],
@@ -297,35 +242,29 @@ mod tests {
         ])
     }
 
-    fn lines(rendered: Rendered) -> Vec<String> {
+    fn text_lines(rendered: Rendered) -> Vec<String> {
         let Rendered::Text(text) = rendered else {
             panic!("expected text output");
         };
-        let body = text
-            .strip_prefix("\x1b[30;47m")
-            .unwrap()
-            .strip_suffix("\x1b[0m")
-            .unwrap();
-        body.split('\n').map(str::to_owned).collect()
+        assert!(
+            text.chars()
+                .all(|character| character == '\n' || !character.is_control()),
+            "text output must not contain terminal control characters"
+        );
+        assert!(
+            !text.ends_with('\n'),
+            "text output must not add a trailing newline"
+        );
+        text.split('\n').map(str::to_owned).collect()
     }
 
     #[test]
-    fn text_renderers_use_black_on_white_and_reset_terminal_attributes() {
-        for mode in [Mode::Braille, Mode::Sextant, Mode::Half] {
-            let Rendered::Text(text) = render(&known_matrix(), mode) else {
-                panic!("expected text output for {mode}");
-            };
-
-            for (default_fg, default_bg) in [
-                (TestColor::White, TestColor::Black),
-                (TestColor::Black, TestColor::White),
-            ] {
-                assert_eq!(
-                    effective_colors(&text, default_fg, default_bg),
-                    (default_fg, default_bg),
-                    "{mode} should restore the terminal colors"
-                );
-            }
+    fn text_renderers_emit_native_text_without_color_controls() {
+        for (mode, expected_rows) in [(Mode::Braille, 3), (Mode::Sextant, 4), (Mode::Half, 6)] {
+            assert_eq!(
+                text_lines(render(&known_matrix(), mode)).len(),
+                expected_rows
+            );
         }
     }
 
@@ -352,20 +291,48 @@ mod tests {
 
     #[test]
     fn braille_packs_two_by_four_with_quiet_zone_and_partial_padding() {
-        let rendered = lines(render(&known_matrix(), Mode::Braille));
+        let rendered = text_lines(render(&known_matrix(), Mode::Braille));
         assert_eq!(rendered.len(), 3); // ceil((3 + 8) / 4)
         assert!(rendered.iter().all(|line| line.chars().count() == 6)); // ceil((3 + 8) / 2)
         assert_eq!(rendered[1].chars().nth(2), Some('⠵'));
         assert_eq!(rendered[1].chars().nth(3), Some('⠁'));
+        assert!(rendered[0].chars().all(|character| character == '⠀'));
+        assert!(
+            rendered[1]
+                .chars()
+                .take(2)
+                .all(|character| character == '⠀')
+        );
+        assert!(
+            rendered[1]
+                .chars()
+                .skip(4)
+                .all(|character| character == '⠀')
+        );
+        assert!(rendered[2].chars().all(|character| character == '⠀'));
     }
 
     #[test]
     fn sextant_packs_two_by_three_and_uses_existing_half_and_full_blocks() {
-        let rendered = lines(render(&known_matrix(), Mode::Sextant));
+        let rendered = text_lines(render(&known_matrix(), Mode::Sextant));
         assert_eq!(rendered.len(), 4); // ceil((3 + 8) / 3)
         assert!(rendered.iter().all(|line| line.chars().count() == 6));
         assert_eq!(rendered[1].chars().nth(2), Some('🬢'));
         assert_eq!(rendered[1].chars().nth(3), Some('🬃'));
+        assert!(rendered[0].chars().all(|character| character == ' '));
+        assert!(
+            rendered[1]
+                .chars()
+                .take(2)
+                .all(|character| character == ' ')
+        );
+        assert!(
+            rendered[1]
+                .chars()
+                .skip(4)
+                .all(|character| character == ' ')
+        );
+        assert!(rendered[3].chars().all(|character| character == ' '));
         assert_eq!(sextant_codepoint(21), 0x258c);
         assert_eq!(sextant_codepoint(42), 0x2590);
         assert_eq!(sextant_codepoint(63), 0x2588);
@@ -373,12 +340,26 @@ mod tests {
 
     #[test]
     fn half_packs_one_by_two_with_explicit_dark_and_light_module_orientation() {
-        let rendered = lines(render(&known_matrix(), Mode::Half));
+        let rendered = text_lines(render(&known_matrix(), Mode::Half));
         assert_eq!(rendered.len(), 6); // ceil((3 + 8) / 2)
         assert!(rendered.iter().all(|line| line.chars().count() == 11));
         assert_eq!(rendered[2].chars().nth(4), Some('▀'));
         assert_eq!(rendered[2].chars().nth(5), Some('▄'));
         assert_eq!(rendered[3].chars().nth(4), Some('▀'));
+        assert!(rendered[0].chars().all(|character| character == ' '));
+        assert!(
+            rendered[2]
+                .chars()
+                .take(4)
+                .all(|character| character == ' ')
+        );
+        assert!(
+            rendered[2]
+                .chars()
+                .skip(7)
+                .all(|character| character == ' ')
+        );
+        assert!(rendered[5].chars().all(|character| character == ' '));
     }
 
     #[test]
@@ -387,7 +368,7 @@ mod tests {
             panic!("expected Kitty output");
         };
         let (control, rest) = protocol.split_once(';').unwrap();
-        assert!(control.starts_with("\x1b_Ga=T,f=24,s=11,v=11,c=11,r=6,q=2,m=0"));
+        assert_eq!(control, "\x1b_Ga=T,f=24,s=11,v=11,q=2,m=0");
         let (encoded, terminator) = rest.split_once("\x1b\\").unwrap();
         assert!(terminator.is_empty());
         let rgb = STANDARD.decode(encoded).unwrap();
@@ -410,7 +391,9 @@ mod tests {
             .filter(|chunk| !chunk.is_empty())
             .collect::<Vec<_>>();
         assert!(chunks.len() > 1);
-        assert!(chunks[0].starts_with("\x1b_Ga=T,f=24,s=48,v=48,c=48,r=24,q=2,m=1;"));
+        assert!(chunks[0].starts_with("\x1b_Ga=T,f=24,s=48,v=48,q=2,m=1;"));
+        assert!(!chunks[0].contains(",c="));
+        assert!(!chunks[0].contains(",r="));
         assert!(chunks[0].len() - chunks[0].find(';').unwrap() - 1 == KITTY_CHUNK_BYTES);
         for chunk in &chunks[1..chunks.len() - 1] {
             assert!(chunk.starts_with("\x1b_Gm=1;"));
