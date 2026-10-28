@@ -264,3 +264,82 @@ fn unreadable_config_error_names_the_path() {
     )));
     assert!(stderr.contains("check file permissions"));
 }
+
+#[test]
+fn remove_is_local_and_preserves_unrelated_files() {
+    let directory = ScratchDirectory::new();
+    let config = ValidConfig::new(&directory);
+    let contents = String::from(
+        "app_url = \"invalid\"\nhostname = \"invalid!\"\nstorage_dir = \"secrets\"\npublic_key = \"invalid\"\nlisten_addr = \"invalid\"\nqr_mode = \"invalid\"\n",
+    );
+    fs::write(&config.config, &contents).unwrap();
+    let target = config.storage.join("synthetic-secret.json");
+    fs::write(&target, b"malformed synthetic envelope").unwrap();
+    for name in ["other.json", "other.lock", "other.tmp", "unrelated"] {
+        fs::write(config.storage.join(name), name).unwrap();
+    }
+    let args = [
+        "--config",
+        config.config.to_str().unwrap(),
+        "rm",
+        "synthetic-secret",
+    ];
+    let output = run(&args);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stdout.is_empty());
+    assert_eq!(output.stderr, b"Removed \"synthetic-secret\".\n");
+    assert!(!target.exists());
+    assert!(config.storage.join("synthetic-secret.lock").is_file());
+    assert_eq!(fs::read_to_string(&config.config).unwrap(), contents);
+    for name in ["other.json", "other.lock", "other.tmp", "unrelated"] {
+        assert_eq!(
+            fs::read(config.storage.join(name)).unwrap(),
+            name.as_bytes()
+        );
+    }
+    let stderr = assert_plain_failure(&run(&args));
+    assert!(stderr.contains("not found at"));
+    assert!(stderr.contains(&target.display().to_string()));
+    let stderr = assert_plain_failure(&run(&[
+        "--config",
+        config.config.to_str().unwrap(),
+        "rm",
+        "../other",
+    ]));
+    assert!(stderr.contains("Invalid secret name"));
+    assert!(config.storage.join("other.json").exists());
+}
+
+#[test]
+fn remove_reports_lock_and_unlink_failures_and_respects_writer() {
+    use creds::storage::SecretWriter;
+    let directory = ScratchDirectory::new();
+    let config = ValidConfig::new(&directory);
+    let args = [
+        "--config",
+        config.config.to_str().unwrap(),
+        "rm",
+        "synthetic-secret",
+    ];
+    let writer = SecretWriter::begin(&config.storage, "synthetic-secret").unwrap();
+    let stderr = assert_plain_failure(&run(&args));
+    assert!(stderr.contains("busy"));
+    writer.publish(b"synthetic", &[7; 32]).unwrap();
+    assert!(config.storage.join("synthetic-secret.json").exists());
+    assert!(run(&args).status.success());
+    assert!(!config.storage.join("synthetic-secret.json").exists());
+    fs::create_dir(config.storage.join("synthetic-secret.json")).unwrap();
+    let stderr = assert_plain_failure(&run(&args));
+    assert!(stderr.contains("Cannot remove secret"));
+    assert!(stderr.contains("synthetic-secret.json"));
+    fs::remove_dir(config.storage.join("synthetic-secret.json")).unwrap();
+    fs::remove_file(config.storage.join("synthetic-secret.lock")).unwrap();
+    fs::create_dir(config.storage.join("synthetic-secret.lock")).unwrap();
+    let stderr = assert_plain_failure(&run(&args));
+    assert!(stderr.contains("Cannot open lock file"));
+    assert!(stderr.contains("synthetic-secret.lock"));
+}

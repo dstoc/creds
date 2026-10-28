@@ -53,6 +53,16 @@ async fn run() -> Result<(), CliError> {
             let path = config_path(explicit_config_path.as_deref())?;
             encrypt(&path, &name, &input).await?;
         }
+        cli::Commands::Rm { name } => {
+            validate_name(&name)
+                .map_err(|error| CliError::with_source("Invalid secret name", error))?;
+            let path = config_path(explicit_config_path.as_deref())?;
+            let storage_dir =
+                config::load_storage_dir(&path).map_err(|error| config_error(&path, error))?;
+            storage::remove_secret(&storage_dir, &name)
+                .map_err(|error| secret_store_error(&name, &storage_dir, "remove", error))?;
+            eprintln!("Removed {name:?}.");
+        }
         cli::Commands::Decrypt { name, output } => {
             let path = config_path(explicit_config_path.as_deref())?;
             decrypt(&path, &name, &output).await?;
@@ -360,7 +370,10 @@ fn secret_store_error(name: &str, storage_dir: &Path, action: &str, error: Store
             ),
             error,
         ),
-        StoreError::Io(error) if action == "read" && error.kind() == io::ErrorKind::NotFound => {
+        StoreError::Io(error)
+            if (action == "read" || action == "remove")
+                && error.kind() == io::ErrorKind::NotFound =>
+        {
             CliError::message(format!(
                 "Secret {name:?} not found at {}. Encrypt it first.",
                 path.display()

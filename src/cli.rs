@@ -7,7 +7,7 @@ use std::path::PathBuf;
     version,
     about = "Encrypt named secrets with browser-approved keys.",
     long_about = "Encrypt and decrypt named secrets with keys approved through the trusted browser app. Setup creates the local configuration, and check validates it; both operate locally without starting an approval listener.",
-    after_help = "Examples:\n  creds setup\n  creds --config ./creds.toml check\n  creds encrypt deploy-token ./token.txt\n  printf '%s' \"$TOKEN\" | creds encrypt deploy-token -\n  creds decrypt deploy-token ./token.txt\n  creds decrypt deploy-token -",
+    after_help = "Examples:\n  creds setup\n  creds --config ./creds.toml check\n  creds encrypt deploy-token ./token.txt\n  printf '%s' \"$TOKEN\" | creds encrypt deploy-token -\n  creds decrypt deploy-token ./token.txt\n  creds decrypt deploy-token -\n  creds rm deploy-token",
     subcommand_required = true,
     disable_help_subcommand = true
 )]
@@ -67,6 +67,16 @@ pub(crate) enum Commands {
         #[arg(value_name = "OUTPUT")]
         output: PathBuf,
     },
+    /// Remove one locally stored secret.
+    #[command(
+        long_about = "Remove one locally stored secret without browser approval. A concurrent encryption must finish before removal can succeed.",
+        after_help = "Examples:\n  creds rm deploy-token\n  creds --config ./creds.toml rm deploy-token"
+    )]
+    Rm {
+        /// Case-sensitive name for the secret.
+        #[arg(value_name = "NAME")]
+        name: String,
+    },
 }
 
 #[cfg(test)]
@@ -122,6 +132,8 @@ mod tests {
             vec!["creds", "check", "extra"],
             vec!["creds", "encrypt", "name"],
             vec!["creds", "encrypt", "name", "input", "extra"],
+            vec!["creds", "rm"],
+            vec!["creds", "rm", "name", "extra"],
             vec!["creds", "decrypt"],
             vec!["creds", "decrypt", "name", "output", "extra"],
         ] {
@@ -149,6 +161,7 @@ mod tests {
             ("check", "Use --details to show the resolved configuration"),
             ("encrypt", "File to encrypt"),
             ("decrypt", "write plaintext to stdout"),
+            ("rm", "without browser approval"),
         ] {
             let error = Cli::try_parse_from(["creds", command, "--help"]).unwrap_err();
             assert_eq!(error.kind(), ErrorKind::DisplayHelp);
