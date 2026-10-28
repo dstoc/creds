@@ -771,7 +771,54 @@ async fn encrypt_decrypt_commands_use_authenticated_live_handoffs_and_frozen_sna
     )?;
 
     fs::write(&file_output, b"existing destination")?;
-    let failed_decrypt = RunningCommand::start(&config, "decrypt", "primary", &file_output, None)?;
+    let mut paths = vec![file_output.clone(), directory.path().to_path_buf()];
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::symlink;
+        let link = directory.path().join("output-link");
+        let dangling = directory.path().join("dangling-link");
+        symlink(&file_output, &link)?;
+        symlink(directory.path().join("missing"), &dangling)?;
+        paths.extend([link, dangling]);
+    }
+    for path in paths {
+        let refused_output = Command::new(env!("CARGO_BIN_EXE_creds"))
+            .args([
+                "--config",
+                config.path.to_str().unwrap(),
+                "decrypt",
+                "primary",
+            ])
+            .arg(&path)
+            .output()?;
+        assert_eq!(refused_output.status.code(), Some(1));
+        assert!(refused_output.stdout.is_empty());
+        let stderr = String::from_utf8_lossy(&refused_output.stderr);
+        assert_eq!(
+            stderr.trim(),
+            format!(
+                "error: Cannot write {}: file already exists. Choose a different output path.",
+                path.display()
+            )
+        );
+        if path == file_output {
+            capture_cli_output(
+                "decrypt-existing-output",
+                "cargo test --locked --test command_flow encrypt_decrypt_commands_use_authenticated_live_handoffs_and_frozen_snapshots -- --exact",
+                &format!(
+                    "creds --config {:?} decrypt primary {:?}",
+                    config.path, path
+                ),
+                "existing output file contains synthetic bytes `existing destination`; no approval supplied",
+                &refused_output,
+            )?;
+        }
+    }
+    assert_eq!(fs::read(&file_output)?, b"existing destination");
+
+    let cancelled_path = directory.path().join("cancelled-output");
+    let failed_decrypt =
+        RunningCommand::start(&config, "decrypt", "primary", &cancelled_path, None)?;
     let rejected = connect_approval(failed_decrypt.approve_url()).await?;
     rejected.assert_request("primary", 3, "decrypt");
     rejected.send_key(key_one, &wrong_signer).await?;
@@ -781,40 +828,26 @@ async fn encrypt_decrypt_commands_use_authenticated_live_handoffs_and_frozen_sna
     assert!(!cancelled_decrypt.status.success());
     assert!(String::from_utf8_lossy(&cancelled_decrypt.stderr).contains("cancelled"));
     assert_eq!(fs::read(&ciphertext_path)?, ciphertext_before);
-    assert_eq!(fs::read(&file_output)?, b"existing destination");
+    assert!(!cancelled_path.exists());
 
-    let existing_output = RunningCommand::start(&config, "decrypt", "primary", &file_output, None)?;
-    let approval = connect_approval(existing_output.approve_url()).await?;
+    // A file appearing after preflight must still be protected by exclusive creation.
+    let race_output = directory.path().join("race-output");
+    let raced = RunningCommand::start(&config, "decrypt", "primary", &race_output, None)?;
+    let approval = connect_approval(raced.approve_url()).await?;
     approval.assert_request("primary", 3, "decrypt");
+    fs::write(&race_output, b"created during approval")?;
     approval.send_key(key_three, &fixture_signer).await?;
-    let refused_output = existing_output.finish()?;
-    assert!(!refused_output.status.success());
-    assert!(refused_output.stdout.is_empty());
-    let stderr = String::from_utf8_lossy(&refused_output.stderr);
-    assert!(
-        stderr.contains(&format!(
-            "Cannot write {}: file already exists",
-            file_output.display()
-        )),
-        "{stderr}"
-    );
-    assert!(!stderr.contains("Custom {"), "{stderr}");
-    assert_eq!(fs::read(&file_output)?, b"existing destination");
-    capture_cli_output(
-        "decrypt-existing-output",
-        "cargo test --locked --test command_flow encrypt_decrypt_commands_use_authenticated_live_handoffs_and_frozen_snapshots -- --exact",
-        &format!(
-            "creds --config {:?} decrypt primary {:?}",
-            config.path, file_output
-        ),
-        "existing output file contains synthetic bytes `existing destination`; synthetic valid assertion and matching key supplied",
-        &refused_output,
-    )?;
+    let raced_output = raced.finish()?;
+    assert_eq!(raced_output.status.code(), Some(1));
+    assert!(raced_output.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&raced_output.stderr).contains("file already exists"));
+    assert_eq!(fs::read(&race_output)?, b"created during approval");
 
     // A valid passkey assertion with a key from the wrong revision must fail before
     // the exclusive output file is created or changed.
+    fs::remove_file(&race_output)?;
     let mismatched_key_decrypt =
-        RunningCommand::start(&config, "decrypt", "primary", &file_output, None)?;
+        RunningCommand::start(&config, "decrypt", "primary", &race_output, None)?;
     let approval = connect_approval(mismatched_key_decrypt.approve_url()).await?;
     approval.assert_request("primary", 3, "decrypt");
     approval.send_key(key_two, &fixture_signer).await?;
@@ -828,15 +861,15 @@ async fn encrypt_decrypt_commands_use_authenticated_live_handoffs_and_frozen_sna
     );
     assert!(!stderr.contains("Custom {"), "{stderr}");
     assert_eq!(fs::read(&ciphertext_path)?, ciphertext_before);
-    assert_eq!(fs::read(&file_output)?, b"existing destination");
+    assert!(!race_output.exists());
     capture_cli_output(
         "decrypt-authentication-failure",
         "cargo test --locked --test command_flow encrypt_decrypt_commands_use_authenticated_live_handoffs_and_frozen_snapshots -- --exact",
         &format!(
             "creds --config {:?} decrypt primary {:?}",
-            config.path, file_output
+            config.path, race_output
         ),
-        "synthetic valid assertion supplied key `[0x22; 32]`, which does not match the encrypted fixture; existing output remains unchanged",
+        "synthetic valid assertion supplied key `[0x22; 32]`, which does not match the encrypted fixture; output remains absent",
         &mismatched_key,
     )?;
 

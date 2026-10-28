@@ -178,6 +178,19 @@ async fn decrypt(config_path: &Path, name: &str, output_path: &Path) -> Result<(
     let snapshot = SecretSnapshot::read(&validated.storage_dir, name)
         .map_err(|error| secret_store_error(name, &validated.storage_dir, "read", error))?;
     let revision = snapshot.revision();
+    if output_path != Path::new("-") {
+        match std::fs::symlink_metadata(output_path) {
+            Ok(_) => {
+                return Err(file_error(
+                    "write output file",
+                    output_path,
+                    io::Error::from(io::ErrorKind::AlreadyExists),
+                ));
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(file_error("write output file", output_path, error)),
+        }
+    }
     let cancellation = start_cancellation_listener();
     let key = handoff::receive_key(
         &validated,
