@@ -94,6 +94,50 @@ pub fn read_plaintext_file(path: &Path) -> Result<Zeroizing<Vec<u8>>, StoreError
     read_plaintext(File::open(path)?)
 }
 
+fn acquire_name_lock(storage_dir: &Path, name: &str) -> Result<File, StoreError> {
+    validate_name(name)
+        .map_err(|error| StoreError::Envelope(EnvelopeError::from_message(error.to_string())))?;
+    if !storage_dir.is_dir() {
+        return Err(StoreError::IoAt {
+            action: "access storage directory".to_owned(),
+            path: storage_dir.to_path_buf(),
+            source: io::Error::new(
+                io::ErrorKind::NotFound,
+                "storage directory is not available",
+            ),
+        });
+    }
+    let lock_path = storage_dir.join(format!("{name}.lock"));
+    let lock = open_lock_file(&lock_path).map_err(|source| StoreError::IoAt {
+        action: format!("open lock file for secret {name:?}"),
+        path: lock_path.clone(),
+        source,
+    })?;
+    match lock.try_lock_exclusive() {
+        Ok(()) => {}
+        Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+            return Err(StoreError::Busy(name.to_owned()));
+        }
+        Err(source) => {
+            return Err(StoreError::IoAt {
+                action: format!("lock secret {name:?}"),
+                path: lock_path,
+                source,
+            });
+        }
+    }
+
+    Ok(lock)
+}
+
+/// Remove one envelope while holding its stable per-name lock.
+pub fn remove_secret(storage_dir: &Path, name: &str) -> Result<(), StoreError> {
+    let lock = acquire_name_lock(storage_dir, name)?;
+    let result = fs::remove_file(storage_dir.join(format!("{name}.json"))).map_err(StoreError::Io);
+    let _ = lock.unlock();
+    result
+}
+
 /// Hold the stable per-name sidecar lock from revision selection through publication.
 pub struct SecretWriter {
     storage_dir: PathBuf,
@@ -104,38 +148,7 @@ pub struct SecretWriter {
 
 impl SecretWriter {
     pub fn begin(storage_dir: &Path, name: &str) -> Result<Self, StoreError> {
-        validate_name(name).map_err(|error| {
-            StoreError::Envelope(EnvelopeError::from_message(error.to_string()))
-        })?;
-        if !storage_dir.is_dir() {
-            return Err(StoreError::IoAt {
-                action: "access storage directory".to_owned(),
-                path: storage_dir.to_path_buf(),
-                source: io::Error::new(
-                    io::ErrorKind::NotFound,
-                    "storage directory is not available",
-                ),
-            });
-        }
-        let lock_path = storage_dir.join(format!("{name}.lock"));
-        let lock = open_lock_file(&lock_path).map_err(|source| StoreError::IoAt {
-            action: format!("open lock file for secret {name:?}"),
-            path: lock_path.clone(),
-            source,
-        })?;
-        match lock.try_lock_exclusive() {
-            Ok(()) => {}
-            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-                return Err(StoreError::Busy(name.to_owned()));
-            }
-            Err(source) => {
-                return Err(StoreError::IoAt {
-                    action: format!("lock secret {name:?}"),
-                    path: lock_path,
-                    source,
-                });
-            }
-        }
+        let lock = acquire_name_lock(storage_dir, name)?;
 
         let current_path = storage_dir.join(format!("{name}.json"));
         let revision = if current_path.exists() {
