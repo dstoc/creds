@@ -44,6 +44,7 @@ fn production_cli_help_omits_the_development_probe_server() {
     assert!(help_text.contains("Usage: creds [OPTIONS] <COMMAND>"));
     assert!(help_text.contains("setup"));
     assert!(help_text.contains("check"));
+    assert!(help_text.contains("list"));
     assert!(help_text.contains("encrypt"));
     assert!(help_text.contains("decrypt"));
     assert!(!help_text.contains("probe"));
@@ -56,6 +57,89 @@ fn production_cli_help_omits_the_development_probe_server() {
     let diagnostic = String::from_utf8_lossy(&rejected.stderr);
     assert!(diagnostic.contains("unrecognized subcommand 'probe-server'"));
     assert!(diagnostic.contains("Usage: creds"));
+}
+
+#[test]
+fn list_is_local_sorted_and_read_only() -> Result<(), Box<dyn Error>> {
+    let directory = TestDirectory::new()?;
+    let config = TestConfig::new(&directory)?;
+    // This address cannot be bound on the local machine; listing must not start a listener.
+    let contents = fs::read_to_string(&config.path)?.replace("0.0.0.0:0", "192.0.2.1:12345");
+    fs::write(&config.path, contents)?;
+    let run = |after: bool| -> std::io::Result<Output> {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_creds"));
+        if after {
+            command.arg("list").arg("--config").arg(&config.path);
+        } else {
+            command.arg("--config").arg(&config.path).arg("list");
+        }
+        command.stdin(Stdio::null()).output()
+    };
+    let empty = run(false)?;
+    assert!(empty.status.success());
+    assert!(empty.stdout.is_empty() && empty.stderr.is_empty());
+    capture_cli_output(
+        "list-empty",
+        "Synthetic empty storage",
+        "creds --config CONFIG list",
+        "none",
+        &empty,
+    )?;
+    fs::write(
+        config.storage.join("zeta.json"),
+        b"synthetic envelope contents",
+    )?;
+    let one = run(false)?;
+    assert!(one.status.success());
+    assert_eq!(one.stdout, b"zeta\n");
+    fs::write(
+        config.storage.join("Alpha.json"),
+        b"synthetic envelope contents",
+    )?;
+    fs::write(config.storage.join("zeta.lock"), b"lock")?;
+    fs::write(config.storage.join(".zeta.random.tmp"), b"temporary")?;
+    fs::write(config.storage.join("bad name.json"), b"invalid")?;
+    fs::create_dir(config.storage.join("directory.json"))?;
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(
+        config.storage.join("zeta.json"),
+        config.storage.join("link.json"),
+    )?;
+    let before = fs::read_dir(&config.storage)?
+        .map(|entry| entry.unwrap().file_name())
+        .collect::<std::collections::BTreeSet<_>>();
+    let listing = run(true)?;
+    assert!(listing.status.success());
+    assert_eq!(listing.stdout, b"Alpha\nzeta\n");
+    assert!(listing.stderr.is_empty());
+    assert_eq!(
+        fs::read(config.storage.join("zeta.json"))?,
+        b"synthetic envelope contents"
+    );
+    let after = fs::read_dir(&config.storage)?
+        .map(|entry| entry.unwrap().file_name())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(before, after);
+    capture_cli_output(
+        "list-names",
+        "Synthetic filenames and malformed envelope contents",
+        "creds list --config CONFIG",
+        "none",
+        &listing,
+    )?;
+    fs::remove_dir_all(&config.storage)?;
+    let error = run(false)?;
+    assert!(!error.status.success());
+    assert!(error.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&error.stderr).contains("storage directory"));
+    capture_cli_output(
+        "list-error",
+        "Synthetic missing storage directory",
+        "creds --config CONFIG list",
+        "none",
+        &error,
+    )?;
+    Ok(())
 }
 
 #[tokio::test]

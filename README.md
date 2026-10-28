@@ -67,14 +67,17 @@ Your approval device must be able to resolve and reach the CLI machine over UDP/
 
 ## Everyday use
 
-Encrypt from a file or from standard input, and decrypt to a new file or to standard output:
+List stored secret names locally, encrypt from a file or from standard input, and decrypt to a new file or to standard output:
 
 ```sh
+creds list
 creds encrypt deploy-token ./token.txt
 printf '%s' "$TOKEN" | creds encrypt deploy-token -
 creds decrypt deploy-token ./token.out
 creds decrypt deploy-token -
 ```
+
+`creds list` prints one name per line in sorted order. It lists valid secret filenames without opening or validating their contents, and does not request approval.
 
 Encrypting a name that already exists replaces its stored value and increments its revision after approval. Decryption creates output files exclusively and refuses to overwrite an existing file; choose another path or remove the old file yourself. Press **Ctrl-C** in the CLI to cancel a pending operation.
 
