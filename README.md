@@ -75,9 +75,12 @@ creds encrypt deploy-token ./token.txt
 printf '%s' "$TOKEN" | creds encrypt deploy-token -
 creds decrypt deploy-token ./token.out
 creds decrypt deploy-token -
+creds rm deploy-token
 ```
 
 `creds list` prints one name per line in sorted order. It lists valid secret filenames without opening or validating their contents, and does not request approval.
+
+`creds rm` removes the local stored secret without browser approval. If an encryption is in progress for the same name, wait for it to finish and retry. Removing a secret resets its next encryption revision to 1; backups are unaffected.
 
 Encrypting a name that already exists replaces its stored value and increments its revision after approval. Decryption creates output files exclusively and refuses to overwrite an existing file; choose another path or remove the old file yourself. Press **Ctrl-C** in the CLI to cancel a pending operation.
 

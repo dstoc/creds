@@ -246,30 +246,7 @@ fn validate_values(
         .map_err(|error| invalid(error.to_string()))?;
     let (public_key, public_key_fingerprint) = decode_public_key(&values.public_key)?;
     if require_storage_directory {
-        let metadata = fs::metadata(&storage_dir).map_err(|error| {
-            invalid(format!(
-                "storage directory {} is not available: {error}",
-                storage_dir.display()
-            ))
-        })?;
-        if !metadata.is_dir() {
-            return Err(invalid(format!(
-                "storage path {} is not a directory",
-                storage_dir.display()
-            ))
-            .into());
-        }
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            if metadata.permissions().mode() & 0o7777 != 0o700 {
-                return Err(invalid(format!(
-                    "storage directory {} must be owner-only (mode 0700)",
-                    storage_dir.display()
-                ))
-                .into());
-            }
-        }
+        validate_storage_directory(&storage_dir)?;
     }
     Ok(ValidatedConfig {
         config_path: config_path.to_path_buf(),
@@ -285,7 +262,35 @@ fn validate_values(
     })
 }
 
-pub fn load(path: &Path) -> Result<ValidatedConfig> {
+fn validate_storage_directory(storage_dir: &Path) -> Result<()> {
+    let metadata = fs::metadata(storage_dir).map_err(|error| {
+        invalid(format!(
+            "storage directory {} is not available: {error}",
+            storage_dir.display()
+        ))
+    })?;
+    if !metadata.is_dir() {
+        return Err(invalid(format!(
+            "storage path {} is not a directory",
+            storage_dir.display()
+        ))
+        .into());
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if metadata.permissions().mode() & 0o7777 != 0o700 {
+            return Err(invalid(format!(
+                "storage directory {} must be owner-only (mode 0700)",
+                storage_dir.display()
+            ))
+            .into());
+        }
+    }
+    Ok(())
+}
+
+fn read_values(path: &Path) -> Result<(PathBuf, ConfigValues)> {
     let path = absolute_path(path)?;
     let mut contents = Vec::new();
     let config_file = File::open(&path)?;
@@ -306,7 +311,19 @@ pub fn load(path: &Path) -> Result<ValidatedConfig> {
         .map_err(|error| invalid(format!("configuration file is not UTF-8: {error}")))?;
     let values: ConfigValues = toml::from_str(text)
         .map_err(|error| invalid(format!("invalid configuration TOML: {error}")))?;
+    Ok((path, values))
+}
+
+pub fn load(path: &Path) -> Result<ValidatedConfig> {
+    let (path, values) = read_values(path)?;
     validate_values(&path, values, true)
+}
+
+pub fn load_storage_dir(path: &Path) -> Result<PathBuf> {
+    let (path, values) = read_values(path)?;
+    let storage_dir = resolve_storage(&values.storage_dir, &path)?;
+    validate_storage_directory(&storage_dir)?;
+    Ok(storage_dir)
 }
 
 pub fn check(path: &Path, details: bool) -> Result<()> {
@@ -783,7 +800,7 @@ mod tests {
                 0o600
             );
             assert_eq!(
-                fs::metadata(&storage_dir).unwrap().permissions().mode() & 0o7777,
+                fs::metadata(storage_dir).unwrap().permissions().mode() & 0o7777,
                 0o700
             );
         }
