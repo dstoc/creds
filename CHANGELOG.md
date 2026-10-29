@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.5.0](https://github.com/dstoc/creds/compare/v0.4.1...v0.5.0) (2026-10-29)
+
+
+### Features
+
+* list stored secret names ([#32](https://github.com/dstoc/creds/issues/32)) ([d137507](https://github.com/dstoc/creds/commit/d13750778ade28f2a2dbac9b38c813e314ac147b))
+* remove a named stored secret ([#33](https://github.com/dstoc/creds/issues/33)) ([b469fb0](https://github.com/dstoc/creds/commit/b469fb0318adf774dfe2fbb91af3c4e1e49834f1))
+
+
+### Bug Fixes
+
+* check decrypt output before approval ([#30](https://github.com/dstoc/creds/issues/30)) ([252a5d8](https://github.com/dstoc/creds/commit/252a5d86d2a1f2f66b2924bbc7ff0680fb80eb07))
+
 ## [0.4.1](https://github.com/dstoc/creds/compare/v0.4.0...v0.4.1) (2026-10-26)
 
 
