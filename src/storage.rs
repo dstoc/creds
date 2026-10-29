@@ -13,6 +13,36 @@ use std::{
 };
 use zeroize::Zeroizing;
 
+/// List valid secret filenames without opening envelopes or following symlinks.
+pub fn list_names(storage_dir: &Path) -> io::Result<Vec<String>> {
+    let mut names = Vec::new();
+    for entry in fs::read_dir(storage_dir)? {
+        let entry = entry?;
+        let filename = entry.file_name();
+        let Some(name) = filename
+            .to_str()
+            .and_then(|filename| filename.strip_suffix(".json"))
+        else {
+            continue;
+        };
+        if validate_name(name).is_ok()
+            && entry
+                .file_type()
+                .map_err(|error| {
+                    io::Error::new(
+                        error.kind(),
+                        format!("cannot inspect {}: {error}", entry.path().display()),
+                    )
+                })?
+                .is_file()
+        {
+            names.push(name.to_owned());
+        }
+    }
+    names.sort_unstable();
+    Ok(names)
+}
+
 #[derive(Debug)]
 pub enum StoreError {
     Busy(String),

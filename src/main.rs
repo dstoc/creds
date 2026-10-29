@@ -49,6 +49,25 @@ async fn run() -> Result<(), CliError> {
             let path = config_path(explicit_config_path.as_deref())?;
             config::check(&path, details).map_err(|error| config_error(&path, error))?;
         }
+        cli::Commands::List => {
+            let path = config_path(explicit_config_path.as_deref())?;
+            let validated = config::load(&path).map_err(|error| config_error(&path, error))?;
+            let names = storage::list_names(&validated.storage_dir).map_err(|error| {
+                CliError::with_source(
+                    format!("Cannot list secrets in {}", validated.storage_dir.display()),
+                    error,
+                )
+            })?;
+            let mut stdout = io::stdout().lock();
+            for name in names {
+                writeln!(stdout, "{name}").map_err(|error| {
+                    CliError::with_source("Cannot write secret names to stdout", error)
+                })?;
+            }
+            stdout.flush().map_err(|error| {
+                CliError::with_source("Cannot write secret names to stdout", error)
+            })?;
+        }
         cli::Commands::Encrypt { name, input } => {
             let path = config_path(explicit_config_path.as_deref())?;
             encrypt(&path, &name, &input).await?;

@@ -40,6 +40,13 @@ pub(crate) enum Commands {
         details: bool,
     },
 
+    /// List stored secret names.
+    #[command(
+        long_about = "List valid stored secret filenames, one name per line, in sorted order. This local, read-only command does not open envelopes or request approval.",
+        after_help = "Examples:\n  creds list\n  creds --config ./creds.toml list"
+    )]
+    List,
+
     /// Encrypt a named secret from a file or stdin.
     #[command(
         long_about = "Encrypt the input as a named secret after browser approval. INPUT is a file path or - to read plaintext from stdin. Diagnostics and approval instructions go to stderr; successful encryption writes no plaintext to stdout.",
@@ -159,6 +166,7 @@ mod tests {
         for (command, expected) in [
             ("setup", "Create the local configuration"),
             ("check", "Use --details to show the resolved configuration"),
+            ("list", "does not open envelopes"),
             ("encrypt", "File to encrypt"),
             ("decrypt", "write plaintext to stdout"),
             ("rm", "without browser approval"),

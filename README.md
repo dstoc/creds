@@ -67,15 +67,18 @@ Your approval device must be able to resolve and reach the CLI machine over UDP/
 
 ## Everyday use
 
-Encrypt from a file or from standard input, and decrypt to a new file or to standard output:
+List stored secret names locally, encrypt from a file or from standard input, and decrypt to a new file or to standard output:
 
 ```sh
+creds list
 creds encrypt deploy-token ./token.txt
 printf '%s' "$TOKEN" | creds encrypt deploy-token -
 creds decrypt deploy-token ./token.out
 creds decrypt deploy-token -
 creds rm deploy-token
 ```
+
+`creds list` prints one name per line in sorted order. It lists valid secret filenames without opening or validating their contents, and does not request approval.
 
 `creds rm` removes the local stored secret without browser approval. If an encryption is in progress for the same name, wait for it to finish and retry. Removing a secret resets its next encryption revision to 1; backups are unaffected.
 
